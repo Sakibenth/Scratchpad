@@ -1,0 +1,1272 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PageNotes — Sketchpad Reader</title>
+    <meta name="description" content="A split-pane PDF reader with integrated paginated sketchpad">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+
+    <!-- Dependencies -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/fabric.js/5.3.1/fabric.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+
+    <style>
+        /* ========== CSS Variables ========== */
+        :root {
+            --bg-primary: #0b0b12;
+            --bg-surface: #131320;
+            --bg-elevated: #1b1b2e;
+            --bg-hover: #24243a;
+            --bg-page: #0a0a10;
+            --accent: #7b68ee;
+            --accent-light: #9585f5;
+            --accent-dim: rgba(123, 104, 238, 0.12);
+            --accent-glow: rgba(123, 104, 238, 0.25);
+            --text-primary: #e4e2ee;
+            --text-secondary: #7e7c92;
+            --text-muted: #484660;
+            --border: #272740;
+            --border-light: #33334d;
+            --green: #4ade80;
+            --yellow: #fbbf24;
+            --red: #f87171;
+        }
+
+        /* ========== Reset & Base ========== */
+        *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: 'Inter', sans-serif;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            height: 100vh;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+        }
+
+        /* ========== Scrollbar ========== */
+        ::-webkit-scrollbar { width: 8px; height: 8px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: var(--border-light); }
+
+        /* ========== Header ========== */
+        .header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0 20px;
+            height: 50px;
+            background: rgba(19, 19, 32, 0.85);
+            backdrop-filter: blur(24px);
+            border-bottom: 1px solid var(--border);
+            flex-shrink: 0;
+            z-index: 100;
+        }
+
+        .header-left { display: flex; align-items: center; gap: 14px; }
+
+        .logo { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 15px; }
+
+        .logo-icon {
+            width: 30px; height: 30px;
+            background: linear-gradient(135deg, var(--accent), #a78bfa);
+            border-radius: 8px; display: flex; align-items: center; justify-content: center;
+        }
+
+        .divider-v { width: 1px; height: 22px; background: var(--border); }
+
+        .file-name { font-size: 13px; color: var(--text-secondary); max-width: 350px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+        .header-right { display: flex; align-items: center; gap: 8px; }
+
+        /* ========== Buttons ========== */
+        .btn {
+            display: inline-flex; align-items: center; gap: 7px;
+            padding: 7px 14px; border: 1px solid var(--border); background: var(--bg-elevated);
+            color: var(--text-primary); border-radius: 8px; font-family: inherit; font-size: 13px; font-weight: 500; cursor: pointer; transition: all 0.2s; white-space: nowrap;
+        }
+
+        .btn:hover { background: var(--bg-hover); border-color: var(--border-light); }
+        .btn:active { transform: scale(0.97); }
+        .btn:disabled { opacity: 0.45; cursor: not-allowed; }
+        .btn:disabled:hover { background: var(--bg-elevated); border-color: var(--border); }
+
+        .btn-primary { background: var(--accent); border-color: var(--accent); color: #fff; box-shadow: 0 2px 12px rgba(123, 104, 238, 0.25); }
+        .btn-primary:hover { background: var(--accent-light); border-color: var(--accent-light); }
+
+        .btn-icon { padding: 6px 8px; min-width: 32px; justify-content: center; }
+
+        /* ========== Main Layout ========== */
+        .main { flex: 1; display: flex; overflow: hidden; }
+
+        /* ========== PDF Pane ========== */
+        .pdf-pane { flex: 1; display: flex; flex-direction: column; min-width: 280px; background: var(--bg-primary); }
+
+        .pdf-toolbar {
+            display: none; align-items: center; justify-content: center; gap: 6px;
+            padding: 7px 16px; background: var(--bg-surface); border-bottom: 1px solid var(--border); flex-shrink: 0;
+        }
+
+        .pdf-toolbar .btn-icon { width: 30px; height: 30px; padding: 0; font-size: 16px; color: var(--text-secondary); border: none; background: transparent; }
+        .pdf-toolbar .btn-icon:hover { background: var(--bg-hover); color: var(--text-primary); }
+
+        .page-nav { display: flex; align-items: center; gap: 4px; }
+
+        .page-input {
+            width: 46px; padding: 4px 6px; text-align: center; background: var(--bg-elevated);
+            border: 1px solid var(--border); color: var(--text-primary); border-radius: 6px; font-family: 'JetBrains Mono', monospace; font-size: 12px; outline: none;
+        }
+
+        .page-total { font-size: 12px; color: var(--text-muted); font-family: 'JetBrains Mono', monospace; }
+        .zoom-info { font-size: 11px; color: var(--text-secondary); font-family: 'JetBrains Mono', monospace; min-width: 38px; text-align: center; user-select: none; }
+        .toolbar-sep { width: 1px; height: 18px; background: var(--border); margin: 0 4px; }
+
+        /* ========== PDF Container ========== */
+        .pdf-container { flex: 1; overflow: auto; display: none; flex-direction: column; align-items: center; padding: 20px; gap: 10px; background: var(--bg-page); }
+
+        .pdf-page-wrapper {
+            background: #ffffff; box-shadow: 0 2px 20px rgba(0,0,0,0.5); border-radius: 3px; overflow: hidden; flex-shrink: 0; position: relative;
+            display: flex; align-items: center; justify-content: center;
+        }
+
+        .page-label { text-align: center; font-size: 11px; color: var(--text-muted); padding: 8px 0 4px; font-family: 'JetBrains Mono', monospace; flex-shrink: 0; }
+
+        .page-loading-spinner {
+            width: 22px; height: 22px; border-radius: 50%;
+            border: 2px solid rgba(123,104,238,0.25); border-top-color: var(--accent);
+            animation: spin 0.8s linear infinite;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+
+        /* ========== Empty State ========== */
+        .empty-state { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 40px; gap: 24px; }
+
+        .drop-zone {
+            width: 100%; max-width: 420px; padding: 56px 40px; border: 2px dashed var(--border); border-radius: 20px; text-align: center; cursor: pointer; background: rgba(123, 104, 238, 0.02);
+        }
+
+        .drop-zone:hover { border-color: var(--accent); background: var(--accent-dim); }
+        .drop-title { font-size: 18px; font-weight: 600; margin-bottom: 8px; }
+        .drop-subtitle { font-size: 13px; color: var(--text-secondary); }
+        .drop-error { font-size: 13px; color: var(--red); margin-top: 4px; min-height: 16px; }
+
+        /* ========== Resizer ========== */
+        .resizer {
+            width: 5px; cursor: col-resize; background: var(--border); position: relative; flex-shrink: 0; transition: background 0.2s; z-index: 10;
+        }
+        .resizer:hover, .resizer.active { background: var(--accent); }
+
+        /* ========== Notes Pane ========== */
+        .notes-pane { width: 45%; min-width: 320px; display: flex; flex-direction: column; background: var(--bg-surface); }
+
+        .notes-header { display: flex; align-items: center; justify-content: space-between; padding: 8px 14px; border-bottom: 1px solid var(--border); flex-shrink: 0; }
+
+        .notes-title { display: flex; align-items: center; gap: 8px; font-size: 12px; font-weight: 600; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.06em; }
+
+        .page-indicator { font-size: 12px; font-family: 'JetBrains Mono', monospace; color: var(--accent-light); background: var(--accent-dim); padding: 2px 8px; border-radius: 4px; white-space: nowrap; }
+
+        .notes-page-nav { display: flex; align-items: center; gap: 4px; flex-shrink: 0; }
+        .notes-page-nav .btn-icon { font-size: 12px; height: 28px; padding: 0 10px; min-width: unset; }
+        .notes-page-nav .btn-icon:disabled { opacity: 0.3; cursor: not-allowed; }
+
+        /* ========== Notes Toolbar ========== */
+        .notes-toolbar { display: flex; align-items: center; gap: 2px; padding: 5px 10px; border-bottom: 1px solid var(--border); flex-shrink: 0; flex-wrap: wrap; }
+
+        .tb {
+            width: 32px; height: 32px; display: flex; align-items: center; justify-content: center; border: 1px solid transparent; background: transparent; color: var(--text-secondary); border-radius: 6px; cursor: pointer; font-size: 14px; transition: all 0.15s ease;
+        }
+
+        .tb:hover { background: var(--bg-hover); color: var(--text-primary); }
+        .tb.active { background: var(--accent-dim); color: var(--accent-light); border-color: var(--accent); }
+        .tb:active { transform: scale(0.92); }
+        .tb:disabled { opacity: 0.35; cursor: not-allowed; }
+        .tb:disabled:hover { background: transparent; color: var(--text-secondary); }
+
+        .color-picker { width: 26px; height: 26px; padding: 0; border: 1px solid var(--border); border-radius: 4px; cursor: pointer; background: transparent; }
+        .color-picker::-webkit-color-swatch-wrapper { padding: 0; }
+        .color-picker::-webkit-color-swatch { border: none; border-radius: 3px; }
+
+        .size-control {
+            display: flex; align-items: center; border: 1px solid var(--border); border-radius: 6px;
+            background: var(--bg-surface); overflow: hidden; height: 26px; margin-left: 4px;
+        }
+        .size-btn {
+            background: transparent; border: none; color: var(--text-secondary); width: 24px; height: 100%;
+            display: flex; align-items: center; justify-content: center; cursor: pointer; font-size: 16px; outline: none;
+        }
+        .size-btn:hover { background: rgba(255,255,255,0.1); color: var(--text-primary); }
+        .size-label {
+            font-size: 13px; color: var(--text-primary); min-width: 24px; text-align: center; font-family: monospace;
+        }
+
+        .toolbar-sep { width: 1px; height: 20px; background: var(--border); margin: 0 4px; }
+
+        /* ========== Canvas Container ========== */
+        .canvas-container-wrap {
+            flex: 1; padding: 0; overflow: hidden; position: relative; background-color: var(--bg-primary);
+        }
+
+        .page-background {
+            position: absolute; top: 0; left: 0; width: 800px; height: 1131px;
+            background-color: var(--bg-surface);
+            box-shadow: 0 4px 24px rgba(0,0,0,0.4), 0 0 0 1px rgba(255,255,255,0.05);
+            transform-origin: 0 0; pointer-events: none; z-index: 0;
+            --grid-color: rgba(255, 255, 255, 0.2);
+            --margin-color: rgba(248, 113, 113, 0.4);
+        }
+
+        /* Fabric.js wraps #drawCanvas in a generated .canvas-container div and layers a
+           second .upper-canvas element on top to receive pointer events. Without explicit
+           rules here, that wrapper can end up misaligned relative to its parent, which
+           makes clicks/strokes land outside the visible drawing area (this is what breaks
+           the pen tool). Pin everything to fill the wrap exactly. */
+        .canvas-container-wrap .canvas-container {
+            position: absolute !important;
+            top: 0 !important;
+            left: 0 !important;
+        }
+        #drawCanvas, .canvas-container-wrap .lower-canvas, .canvas-container-wrap .upper-canvas {
+            z-index: 1; position: absolute; top: 0; left: 0; cursor: crosshair;
+        }
+        .canvas-container-wrap .upper-canvas { z-index: 2; }
+
+        .pan-buttons {
+            position: absolute; right: 20px; bottom: 20px;
+            display: flex; flex-direction: column; gap: 10px; z-index: 10;
+        }
+        .pan-btn {
+            width: 42px; height: 42px; border-radius: 50%;
+            background: rgba(30, 30, 40, 0.85); color: var(--text-primary);
+            border: 1px solid rgba(255,255,255,0.15); display: flex;
+            align-items: center; justify-content: center; cursor: pointer;
+            font-size: 16px; backdrop-filter: blur(4px); transition: 0.2s;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.3); outline: none;
+        }
+        .pan-btn:hover { background: rgba(50, 50, 65, 0.95); transform: scale(1.05); }
+        .pan-btn:active { transform: scale(0.95); }
+
+        .style-picker {
+            background: transparent; border: 1px solid var(--border); color: var(--text-secondary);
+            border-radius: 6px; padding: 3px 6px; font-size: 11px; outline: none; cursor: pointer;
+            font-family: 'Inter', sans-serif;
+        }
+        .style-picker:hover { border-color: var(--border-light); color: var(--text-primary); }
+
+        .bg-blank { background-image: none !important; }
+        .bg-lined {
+            background-image:
+                linear-gradient(90deg, transparent 40px, var(--margin-color) 40px, var(--margin-color) 42px, transparent 42px),
+                repeating-linear-gradient(transparent, transparent 31px, var(--grid-color) 31px, var(--grid-color) 32px) !important;
+        }
+        .bg-grid {
+            background-image:
+                linear-gradient(var(--grid-color) 1px, transparent 1px),
+                linear-gradient(90deg, var(--grid-color) 1px, transparent 1px) !important;
+            background-size: 20px 20px !important;
+        }
+
+        .empty-canvas-overlay {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; pointer-events: none; opacity: 0.5; color: var(--text-muted); font-size: 14px; z-index: 0;
+        }
+
+        /* ========== Toast ========== */
+        .toast {
+            position: fixed; bottom: 28px; left: 50%; transform: translateX(-50%) translateY(80px); padding: 10px 22px; background: var(--bg-elevated); border: 1px solid var(--border-light); border-radius: 10px; font-size: 13px; color: var(--text-primary); box-shadow: 0 8px 32px rgba(0,0,0,0.5); z-index: 10000; transition: transform 0.35s, opacity 0.3s; opacity: 0; pointer-events: none;
+        }
+        .toast.show { transform: translateX(-50%) translateY(0); opacity: 1; }
+        .toast.toast-error { border-color: var(--red); }
+
+    </style>
+</head>
+<body>
+    <input type="file" id="fileInput" accept=".pdf,application/pdf" hidden>
+
+    <header class="header">
+        <div class="header-left">
+            <div class="logo">
+                <div class="logo-icon">✎</div>
+                <span>SketchReader</span>
+            </div>
+            <span class="divider-v"></span>
+            <span id="fileName" class="file-name">No file open</span>
+        </div>
+        <div class="header-right">
+            <button class="btn btn-primary" onclick="openFile()" id="openBtn">Open PDF</button>
+            <button class="btn" onclick="exportToPDF()" id="exportBtn" disabled>Export Notes PDF</button>
+        </div>
+    </header>
+
+    <main class="main">
+        <!-- PDF Pane -->
+        <div class="pdf-pane" id="pdfPane">
+            <div class="pdf-toolbar" id="pdfToolbar">
+                <button class="btn btn-icon" onclick="zoomOut()">-</button>
+                <span class="zoom-info" id="zoomInfo">100%</span>
+                <button class="btn btn-icon" onclick="zoomIn()">+</button>
+                <button class="btn btn-icon" onclick="fitToWidth()">⇔</button>
+                <span class="toolbar-sep"></span>
+                <div class="page-nav">
+                    <button class="btn btn-icon" onclick="prevPage()">◀</button>
+                    <input type="number" class="page-input" id="pageInput" value="1" min="1">
+                    <span class="page-total">/ <span id="totalPages">0</span></span>
+                    <button class="btn btn-icon" onclick="nextPage()">▶</button>
+                </div>
+            </div>
+
+            <div class="empty-state" id="emptyState">
+                <div class="drop-zone" id="dropZone" onclick="openFile()">
+                    <div class="drop-title">Open a PDF to begin</div>
+                    <div class="drop-subtitle">Drag &amp; drop a file here</div>
+                    <div class="drop-error" id="dropError"></div>
+                </div>
+            </div>
+
+            <div class="pdf-container" id="pdfContainer"></div>
+        </div>
+
+        <!-- Resizer -->
+        <div class="resizer" id="resizer"></div>
+
+        <!-- Notes Pane -->
+        <div class="notes-pane" id="notesPane">
+            <div class="notes-header">
+                <div class="notes-title">Drawing Pad</div>
+                <div style="display:flex; align-items:center; gap:4px; margin-left: auto; margin-right: 14px;">
+                    <button class="btn btn-icon btn-ghost" onclick="zoomCanvas(-0.1)" title="Zoom Out" style="font-size:16px; padding:2px;">-</button>
+                    <span id="canvasZoomInfo" style="font-size:11px; font-family:monospace; min-width:36px; text-align:center; color:var(--text-secondary)">100%</span>
+                    <button class="btn btn-icon btn-ghost" onclick="zoomCanvas(0.1)" title="Zoom In" style="font-size:16px; padding:2px;">+</button>
+                    <button class="btn btn-icon btn-ghost" onclick="resetCanvasZoom()" title="Reset Zoom" style="font-size:11px; padding:2px 6px;">Fit</button>
+                </div>
+                <div class="notes-page-nav" id="notesPageNav">
+                    <button class="btn btn-icon" id="btn-notes-prev" onclick="sketchPrevPage()" title="Previous sketch page" disabled>◀</button>
+                    <div class="page-indicator" id="notesPageIndicator" title="Alt+Drag or Middle Click to Pan">No file</div>
+                    <button class="btn btn-icon" id="btn-notes-next" onclick="sketchNextPage()" title="Next sketch page" disabled>▶</button>
+                    <span class="toolbar-sep"></span>
+                    <button class="btn btn-icon" id="btn-add-page" onclick="addSketchPage()" title="Add a new blank sketch page" disabled>+ Page</button>
+                    <button class="btn btn-icon" id="btn-delete-page" onclick="deleteSketchPage()" title="Delete the last sketch page" style="color:var(--red);" disabled>🗑️ Page</button>
+                </div>
+            </div>
+
+            <div class="notes-toolbar">
+                <button class="tb active" id="btn-select" onclick="setMode('select')" title="Select Tool (V)">✋</button>
+                <button class="tb" id="btn-pen" onclick="setMode('pen')" title="Pen Tool (P)">✏️</button>
+                <input type="color" class="color-picker" id="penColor" value="#e4e2ee" title="Pen Color" onchange="updateBrush()">
+                <div class="size-control" title="Tool Size">
+                    <button class="size-btn" onclick="adjustPenSize(-1)">-</button>
+                    <span class="size-label" id="penSizeDisplay">3</span>
+                    <button class="size-btn" onclick="adjustPenSize(1)">+</button>
+                </div>
+
+                <span class="toolbar-sep"></span>
+                <button class="tb" id="btn-highlight" onclick="setMode('highlight')" title="Highlighter (H)">🖍️</button>
+
+                <span class="toolbar-sep"></span>
+                <button class="tb" id="btn-erase" onclick="setMode('erase')" title="Object Eraser (E)">🧹</button>
+
+                <span class="toolbar-sep"></span>
+                <button class="tb" id="btn-copy" onclick="copyObj()" title="Copy (Ctrl+C)">⧉</button>
+                <button class="tb" id="btn-paste" onclick="pasteObj()" title="Paste (Ctrl+V)" disabled>📋</button>
+                <button class="tb" id="btn-dup" onclick="duplicateObj()" title="Duplicate (Ctrl+D)">❐</button>
+                <button class="tb" id="btn-group" onclick="groupObj()" title="Group/Ungroup (Ctrl+G)">🖇️</button>
+
+                <span style="flex:1"></span>
+                <select id="pageStyle" class="style-picker" onchange="updatePageStyle()" title="Page Style">
+                    <option value="blank">Blank</option>
+                    <option value="lined">Lined</option>
+                    <option value="grid">Grid</option>
+                </select>
+                <div style="display:flex; align-items:center; gap:6px; margin-right:10px;" title="Page Background Color">
+                    <span style="font-size:11px; color:var(--text-muted)">Bg:</span>
+                    <input type="color" class="color-picker" id="bgColor" value="#131320" onchange="updateBgColor()">
+                </div>
+                <button class="tb" id="btn-delete" onclick="deleteObj()" title="Delete Selected (Del)" style="color:var(--red)">🗑️</button>
+                <button class="tb" onclick="clearCanvas()" title="Clear Canvas" style="font-size:12px;width:auto;padding:0 8px;">Clear</button>
+            </div>
+
+            <div class="canvas-container-wrap" id="canvasContainerWrap">
+                <div id="pageBackground" class="page-background bg-blank"></div>
+                <div class="empty-canvas-overlay" id="emptyCanvasOverlay">Open a PDF to start sketching</div>
+                <canvas id="drawCanvas"></canvas>
+
+                <div class="pan-buttons">
+                    <button class="pan-btn" title="Scroll Up" id="panUpBtn">▲</button>
+                    <button class="pan-btn" title="Scroll Down" id="panDownBtn">▼</button>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <div class="toast" id="toast"></div>
+
+    <script>
+        'use strict';
+
+        // ========== State ==========
+        let pdfDoc = null;
+        let currentPage = 1;     // PDF viewer's own page (independent of the sketchpad)
+        let totalPages = 0;      // pages in the actual PDF
+        let scale = 1.0;
+        let fileKey = '';      // storage key derived from name+size+lastModified (collision-resistant)
+        let fileLabel = '';    // human-readable label for display
+        let basePageWidth = 0;
+        let basePageHeight = 0;
+
+        // The sketchpad is its own independent notebook — not tied to PDF page numbers.
+        // It starts at 1 blank page; new pages are only added via the + Page button.
+        let sketchPage = 1;
+        let sketchPageCount = 1;
+
+        let canvas = null;
+        let currentMode = 'select'; // select, pen, highlight, erase
+        let _clipboard = null;
+        let canvasZoom = 1.0;
+        let currentPenSize = 3;
+        let isLoadingPage = false; // guards against saving mid-load and races during export
+        const PAGE_W = 800;
+        const PAGE_H = 1131;
+
+        const $ = id => document.getElementById(id);
+
+        // ========== Storage helpers (quota-safe) ==========
+        const Store = {
+            get(key) {
+                try { return localStorage.getItem(key); }
+                catch (e) { console.warn('Storage read failed', e); return null; }
+            },
+            set(key, value) {
+                try { localStorage.setItem(key, value); return true; }
+                catch (e) {
+                    console.warn('Storage write failed', e);
+                    if (e && (e.name === 'QuotaExceededError' || e.code === 22)) {
+                        showToast('⚠ Storage full — this page may not save. Try clearing old notes.', true);
+                    } else {
+                        showToast('⚠ Could not save notes', true);
+                    }
+                    return false;
+                }
+            },
+            remove(key) {
+                try { localStorage.removeItem(key); } catch (e) { /* ignore */ }
+            }
+        };
+
+        window.addEventListener('error', function(e) {
+            // Surface unexpected errors without flooding the user for routine issues.
+            console.error(e.error || e.message);
+            showToast('⚠ ' + (e.message || 'Something went wrong'), true);
+        });
+
+        // ========== Fabric Canvas Init ==========
+        function initCanvas() {
+            const wrap = $('canvasContainerWrap');
+            canvas = new fabric.Canvas('drawCanvas', {
+                isDrawingMode: false,
+                width: wrap.clientWidth,
+                height: wrap.clientHeight,
+                backgroundColor: 'transparent',
+                selection: true
+            });
+
+            const canvasDOM = $('drawCanvas');
+            canvasDOM.style.touchAction = 'none'; // prevent browser scroll/zoom gestures from stealing input
+
+            // Handle Resize
+            new ResizeObserver(entries => {
+                for (let entry of entries) {
+                    canvas.setWidth(entry.contentRect.width);
+                    canvas.setHeight(entry.contentRect.height);
+                    canvas.renderAll();
+                }
+            }).observe(wrap);
+
+            // ---- Zoom and Pan via Mouse Wheel ----
+            canvas.on('mouse:wheel', function(opt) {
+                const evt = opt.e;
+                let dx = evt.deltaX || 0;
+                let dy = evt.deltaY || 0;
+
+                if (evt.deltaMode === 1) { dx *= 20; dy *= 20; }       // DOM_DELTA_LINE
+                else if (evt.deltaMode === 2) { dx *= 400; dy *= 400; } // DOM_DELTA_PAGE
+                else { dx *= 0.6; dy *= 0.6; }                          // dampen pixel scroll
+
+                if (evt.ctrlKey || evt.metaKey) {
+                    let zoom = canvas.getZoom();
+                    zoom *= Math.exp(-dy / 400);
+                    zoom = Math.max(0.2, Math.min(zoom, 5));
+                    canvas.zoomToPoint({ x: evt.offsetX, y: evt.offsetY }, zoom);
+                    canvasZoom = zoom;
+                    $('canvasZoomInfo').textContent = Math.round(canvasZoom * 100) + '%';
+                } else {
+                    canvas.viewportTransform[4] -= dx;
+                    canvas.viewportTransform[5] -= dy;
+                    canvas.requestRenderAll();
+                }
+                updateBgTransform();
+                evt.preventDefault();
+                evt.stopPropagation();
+            });
+
+            // ---- Panning (alt-drag / middle / right click) ----
+            canvas.on('mouse:down', function(opt) {
+                const evt = opt.e;
+                if (evt.altKey || evt.button === 1 || evt.button === 2) {
+                    this.isDragging = true;
+                    this.selection = false;
+                    this.lastPosX = evt.clientX;
+                    this.lastPosY = evt.clientY;
+                    return;
+                }
+                // Erase tool: click to remove an object under the cursor
+                if (currentMode === 'erase' && opt.target) {
+                    canvas.remove(opt.target);
+                    saveCanvasData();
+                }
+            });
+
+            canvas.on('mouse:move', function(opt) {
+                if (this.isDragging) {
+                    const e = opt.e;
+                    const vpt = this.viewportTransform;
+                    vpt[4] += e.clientX - this.lastPosX;
+                    vpt[5] += e.clientY - this.lastPosY;
+                    this.requestRenderAll();
+                    this.lastPosX = e.clientX;
+                    this.lastPosY = e.clientY;
+                    updateBgTransform();
+                } else if (currentMode === 'erase' && opt.target && opt.e.buttons === 1) {
+                    canvas.remove(opt.target);
+                    saveCanvasData();
+                }
+            });
+
+            canvas.on('mouse:up', function() {
+                this.isDragging = false;
+                this.selection = (currentMode === 'select');
+            });
+
+            wrap.addEventListener('contextmenu', e => e.preventDefault());
+
+            // ---- Single source of truth for drawing: Fabric's native free-drawing mode ----
+            // (Removed the redundant manual mousedown/mousemove path-preview system that
+            // duplicated strokes alongside Fabric's own PencilBrush output.)
+            canvas.on('path:created', function(e) {
+                e.path.set({ perPixelTargetFind: true, selectable: (currentMode === 'select') });
+                saveCanvasData();
+            });
+
+            canvas.on('object:modified', () => saveCanvasData());
+            canvas.on('object:added', () => saveCanvasData());
+            canvas.on('object:removed', () => saveCanvasData());
+            canvas.on('selection:created', updateSelectionDependentButtons);
+            canvas.on('selection:updated', updateSelectionDependentButtons);
+            canvas.on('selection:cleared', updateSelectionDependentButtons);
+
+            // Load persisted global style preferences
+            const savedStyle = Store.get('pagenotes_global_style') || 'blank';
+            $('pageStyle').value = savedStyle;
+            updatePageStyle();
+
+            const savedBg = Store.get('pagenotes_global_bg') || '#131320';
+            $('bgColor').value = savedBg;
+            updateBgColor();
+
+            resetCanvasZoom();
+            updateSelectionDependentButtons();
+
+            // ---- Keybindings ----
+            window.addEventListener('keydown', e => {
+                const tag = e.target.tagName;
+                if (tag === 'INPUT' || tag === 'TEXTAREA' || e.target.isContentEditable) return;
+
+                if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); deleteObj(); }
+                if (e.ctrlKey && e.key === 'c') copyObj();
+                if (e.ctrlKey && e.key === 'v') pasteObj();
+                if (e.ctrlKey && e.key === 'd') { e.preventDefault(); duplicateObj(); }
+                if (e.ctrlKey && e.key === 'g') { e.preventDefault(); groupObj(); }
+
+                if (!e.ctrlKey && !e.shiftKey && !e.metaKey) {
+                    const k = e.key.toLowerCase();
+                    if (k === 'v') setMode('select');
+                    if (k === 'p') setMode('pen');
+                    if (k === 'h') setMode('highlight');
+                    if (k === 'e') setMode('erase');
+                }
+            });
+
+            // ---- Pan buttons (held-press continuous panning) ----
+            const upBtn = $('panUpBtn'), downBtn = $('panDownBtn');
+            const bind = (el, dy) => {
+                const start = ev => { ev.preventDefault(); startPan(dy); };
+                el.addEventListener('mousedown', start);
+                el.addEventListener('touchstart', start, { passive: false });
+                el.addEventListener('mouseup', stopPan);
+                el.addEventListener('mouseleave', stopPan);
+                el.addEventListener('touchend', stopPan);
+            };
+            bind(upBtn, 10);
+            bind(downBtn, -10);
+        }
+
+        function setMode(mode) {
+            currentMode = mode;
+
+            ['select', 'pen', 'highlight', 'erase'].forEach(m => {
+                $('btn-' + m).classList.toggle('active', m === mode);
+            });
+
+            canvas.discardActiveObject();
+            canvas.calcOffset(); // re-sync hit-testing offset in case layout shifted (pane resize, etc.)
+
+            if (mode === 'pen' || mode === 'highlight') {
+                canvas.isDrawingMode = true;
+                canvas.selection = false;
+                canvas.forEachObject(obj => obj.selectable = false);
+                canvas.freeDrawingBrush = new fabric.PencilBrush(canvas);
+                updateBrush();
+            } else {
+                canvas.isDrawingMode = false;
+                canvas.selection = (mode === 'select');
+                canvas.forEachObject(obj => obj.selectable = (mode === 'select'));
+            }
+
+            canvas.requestRenderAll();
+            updateSelectionDependentButtons();
+        }
+
+        function updateBrush() {
+            if (!canvas || !canvas.freeDrawingBrush) return;
+
+            if (currentMode === 'highlight') {
+                const hex = $('penColor').value;
+                canvas.freeDrawingBrush.color = hexToRgba(hex, 0.4);
+                canvas.freeDrawingBrush.width = currentPenSize * 5;
+            } else if (currentMode === 'pen') {
+                canvas.freeDrawingBrush.color = $('penColor').value;
+                canvas.freeDrawingBrush.width = currentPenSize;
+            }
+        }
+
+        function hexToRgba(hex, alpha) {
+            const r = parseInt(hex.substr(1, 2), 16);
+            const g = parseInt(hex.substr(3, 2), 16);
+            const b = parseInt(hex.substr(5, 2), 16);
+            return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+        }
+
+        function adjustPenSize(delta) {
+            currentPenSize = Math.max(1, Math.min(50, currentPenSize + delta));
+            $('penSizeDisplay').textContent = currentPenSize;
+            updateBrush();
+        }
+
+        function zoomCanvas(delta) {
+            setCanvasZoom(Math.max(0.2, Math.min(canvasZoom + delta, 5.0)));
+        }
+
+        function resetCanvasZoom() {
+            canvasZoom = 1.0;
+            if (canvas) {
+                canvas.viewportTransform[0] = 1;
+                canvas.viewportTransform[1] = 0;
+                canvas.viewportTransform[2] = 0;
+                canvas.viewportTransform[3] = 1;
+                canvas.viewportTransform[4] = (canvas.width - PAGE_W) / 2;
+                canvas.viewportTransform[5] = 40;
+                canvas.requestRenderAll();
+            }
+            $('canvasZoomInfo').textContent = '100%';
+            updateBgTransform();
+        }
+
+        function setCanvasZoom(z) {
+            canvasZoom = Math.round(z * 10) / 10;
+            canvas.zoomToPoint({ x: canvas.width / 2, y: canvas.height / 2 }, canvasZoom);
+            $('canvasZoomInfo').textContent = Math.round(canvasZoom * 100) + '%';
+            updateBgTransform();
+        }
+
+        function updateBgTransform() {
+            if (!canvas) return;
+            const vpt = canvas.viewportTransform;
+            $('pageBackground').style.transform = `matrix(${vpt[0]}, ${vpt[1]}, ${vpt[2]}, ${vpt[3]}, ${vpt[4]}, ${vpt[5]})`;
+        }
+
+        // ========== Continuous Panning ==========
+        let panInterval = null;
+        function startPan(dy) {
+            stopPan();
+            panCanvas(dy);
+            panInterval = setInterval(() => panCanvas(dy), 16);
+        }
+        function stopPan() {
+            if (panInterval) clearInterval(panInterval);
+            panInterval = null;
+        }
+        function panCanvas(dy) {
+            if (!canvas) return;
+            canvas.viewportTransform[5] += dy;
+            canvas.requestRenderAll();
+            updateBgTransform();
+        }
+
+        // ========== Canvas Actions ==========
+        function updateSelectionDependentButtons() {
+            const hasSelection = !!(canvas && canvas.getActiveObject());
+            $('btn-copy').disabled = !hasSelection;
+            $('btn-dup').disabled = !hasSelection;
+            $('btn-group').disabled = !hasSelection;
+            $('btn-delete').disabled = !hasSelection;
+            $('btn-paste').disabled = !_clipboard;
+        }
+
+        function copyObj() {
+            const active = canvas.getActiveObject();
+            if (!active) { showToast('Nothing selected to copy'); return; }
+            active.clone(function(cloned) {
+                _clipboard = cloned;
+                $('btn-paste').disabled = false;
+                showToast('Copied');
+            });
+        }
+
+        function pasteObj() {
+            if (!_clipboard) { showToast('Clipboard is empty'); return; }
+            _clipboard.clone(function(clonedObj) {
+                canvas.discardActiveObject();
+                clonedObj.set({ left: clonedObj.left + 15, top: clonedObj.top + 15, evented: true });
+                if (clonedObj.type === 'activeSelection') {
+                    clonedObj.canvas = canvas;
+                    clonedObj.forEachObject(obj => canvas.add(obj));
+                    clonedObj.setCoords();
+                } else {
+                    canvas.add(clonedObj);
+                }
+                _clipboard.top += 15;
+                _clipboard.left += 15;
+                canvas.setActiveObject(clonedObj);
+                canvas.requestRenderAll();
+                saveCanvasData();
+            });
+        }
+
+        function duplicateObj() {
+            const obj = canvas.getActiveObject();
+            if (!obj) { showToast('Nothing selected to duplicate'); return; }
+            obj.clone(function(cloned) {
+                cloned.set({ left: cloned.left + 15, top: cloned.top + 15, evented: true });
+                if (cloned.type === 'activeSelection') {
+                    cloned.canvas = canvas;
+                    cloned.forEachObject(o => canvas.add(o));
+                    cloned.setCoords();
+                } else {
+                    canvas.add(cloned);
+                }
+                canvas.discardActiveObject();
+                canvas.setActiveObject(cloned);
+                canvas.requestRenderAll();
+                saveCanvasData();
+            });
+        }
+
+        function groupObj() {
+            const obj = canvas.getActiveObject();
+            if (!obj) { showToast('Nothing selected to group'); return; }
+            if (obj.type === 'activeSelection') {
+                obj.toGroup();
+                showToast('Grouped');
+            } else if (obj.type === 'group') {
+                obj.toActiveSelection();
+                showToast('Ungrouped');
+            } else {
+                showToast('Select multiple objects to group');
+                return;
+            }
+            canvas.requestRenderAll();
+            updateSelectionDependentButtons();
+            saveCanvasData();
+        }
+
+        function deleteObj() {
+            const active = canvas.getActiveObjects();
+            if (!active.length) { showToast('Nothing selected to delete'); return; }
+            active.forEach(obj => canvas.remove(obj));
+            canvas.discardActiveObject();
+            saveCanvasData();
+        }
+
+        function clearCanvas() {
+            if (!fileKey) { showToast('Open a PDF first'); return; }
+            if (confirm('Clear notes for this page? This cannot be undone.')) {
+                canvas.clear();
+                saveCanvasData();
+                showToast('Page cleared');
+            }
+        }
+
+        // ========== Storage Sync ==========
+        // Sketch pages are stored independently from the PDF — page numbers here have no
+        // relationship to PDF page numbers, so the notebook isn't reset or rewritten when
+        // the PDF viewer scrolls.
+        function sketchStorageKey(fkey, pageNum) {
+            return `pagenotes__${fkey}__sketch_${pageNum}`;
+        }
+
+        function sketchCountKey(fkey) {
+            return `pagenotes__${fkey}__sketch_count`;
+        }
+
+        function saveSketchPageCount() {
+            if (!fileKey) return;
+            Store.set(sketchCountKey(fileKey), String(sketchPageCount));
+        }
+
+        function loadSketchPageCount() {
+            const raw = fileKey ? Store.get(sketchCountKey(fileKey)) : null;
+            const n = parseInt(raw, 10);
+            sketchPageCount = (!isNaN(n) && n >= 1) ? n : 1;
+        }
+
+        function saveCanvasData() {
+            if (!fileKey || isLoadingPage) return;
+            const key = sketchStorageKey(fileKey, sketchPage);
+            const json = JSON.stringify(canvas.toJSON());
+            Store.set(key, json);
+        }
+
+        function loadCanvasData(pageNum, callback) {
+            isLoadingPage = true;
+            const key = sketchStorageKey(fileKey, pageNum);
+            const jsonStr = Store.get(key);
+
+            const finish = () => {
+                isLoadingPage = false;
+                if (callback) callback();
+            };
+
+            if (jsonStr) {
+                canvas.loadFromJSON(jsonStr, function() {
+                    canvas.forEachObject(obj => {
+                        obj.set({ perPixelTargetFind: true, selectable: (currentMode === 'select') });
+                    });
+
+                    // Legacy per-page background color support: migrate into global setting once.
+                    if (canvas.backgroundColor && canvas.backgroundColor !== 'transparent') {
+                        $('bgColor').value = canvas.backgroundColor;
+                        canvas.backgroundColor = 'transparent';
+                        updateBgColor();
+                    }
+
+                    canvas.requestRenderAll();
+                    finish();
+                });
+            } else {
+                canvas.clear();
+                canvas.backgroundColor = 'transparent';
+                canvas.requestRenderAll();
+                finish();
+            }
+        }
+
+        function updateBgColor() {
+            const hex = $('bgColor').value;
+            const pageBg = $('pageBackground');
+            pageBg.style.backgroundColor = hex;
+            Store.set('pagenotes_global_bg', hex);
+
+            if (hex.length === 7) {
+                const r = parseInt(hex.substr(1, 2), 16);
+                const g = parseInt(hex.substr(3, 2), 16);
+                const b = parseInt(hex.substr(5, 2), 16);
+                const yiq = ((r * 299) + (g * 587) + (b * 114)) / 1000;
+                pageBg.style.setProperty('--grid-color', yiq >= 128 ? 'rgba(0, 0, 0, 0.25)' : 'rgba(255, 255, 255, 0.2)');
+            }
+        }
+
+        function updatePageStyle() {
+            const pageBg = $('pageBackground');
+            pageBg.classList.remove('bg-blank', 'bg-lined', 'bg-grid');
+            const style = $('pageStyle').value;
+            pageBg.classList.add('bg-' + style);
+            Store.set('pagenotes_global_style', style);
+        }
+
+        // ========== PDF Logic ==========
+        pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+
+        $('fileInput').addEventListener('change', e => {
+            if (e.target.files[0]) loadPDF(e.target.files[0]);
+        });
+
+        function openFile() { $('fileInput').click(); }
+
+        $('dropZone').addEventListener('dragover', e => { e.preventDefault(); $('dropZone').style.borderColor = 'var(--accent)'; });
+        $('dropZone').addEventListener('dragleave', () => { $('dropZone').style.borderColor = 'var(--border)'; });
+        $('dropZone').addEventListener('drop', e => {
+            e.preventDefault();
+            $('dropZone').style.borderColor = 'var(--border)';
+            if (e.dataTransfer.files[0]) loadPDF(e.dataTransfer.files[0]);
+        });
+
+        function setDropError(msg) {
+            $('dropError').textContent = msg || '';
+        }
+
+        async function loadPDF(file) {
+            setDropError('');
+
+            if (!file.type.includes('pdf') && !file.name.toLowerCase().endsWith('.pdf')) {
+                setDropError('Please choose a PDF file.');
+                return;
+            }
+
+            try {
+                // Collision-resistant key: name + size + last-modified avoids clobbering notes
+                // when two different files happen to share a filename.
+                fileKey = `${file.name}__${file.size}__${file.lastModified}`;
+                fileLabel = file.name;
+                $('fileName').textContent = fileLabel;
+                $('fileName').title = fileLabel;
+
+                const arrayBuffer = await file.arrayBuffer();
+                pdfDoc = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+                totalPages = pdfDoc.numPages;
+                $('totalPages').textContent = totalPages;
+                loadSketchPageCount();
+
+                $('emptyState').style.display = 'none';
+                $('emptyCanvasOverlay').style.display = 'none';
+                $('pdfContainer').style.display = 'flex';
+                $('pdfToolbar').style.display = 'flex';
+                $('exportBtn').disabled = false;
+
+                const page1 = await pdfDoc.getPage(1);
+                const vp = page1.getViewport({ scale: 1.0 });
+                basePageWidth = vp.width;
+                basePageHeight = vp.height;
+
+                const cw = $('pdfContainer').clientWidth - 48;
+                if (cw > 0) scale = Math.round((cw / basePageWidth) * 100) / 100;
+                $('zoomInfo').textContent = Math.round(scale * 100) + '%';
+
+                currentPage = 1;
+                await buildPages();
+                $('pageInput').value = 1;
+
+                sketchPage = 1; // sketchpad always opens on its own page 1, independent of the PDF
+                updateNotesPageIndicator();
+                loadCanvasData(sketchPage);
+
+                showToast(`📄 Loaded ${fileLabel}`);
+            } catch (err) {
+                console.error(err);
+                setDropError('Could not open this PDF — it may be corrupted or password-protected.');
+                showToast('⚠ Failed to load PDF', true);
+                pdfDoc = null;
+                fileKey = '';
+                $('exportBtn').disabled = true;
+            }
+        }
+
+        const rendered = new Set();
+
+        async function buildPages() {
+            rendered.clear();
+            const cont = $('pdfContainer');
+            cont.innerHTML = '';
+            const w = basePageWidth * scale;
+            const h = basePageHeight * scale;
+
+            for (let i = 1; i <= totalPages; i++) {
+                const wrapper = document.createElement('div');
+                wrapper.className = 'pdf-page-wrapper';
+                wrapper.id = 'page-' + i;
+                wrapper.dataset.page = i;
+                wrapper.style.width = w + 'px';
+                wrapper.style.height = h + 'px';
+                const spinner = document.createElement('div');
+                spinner.className = 'page-loading-spinner';
+                wrapper.appendChild(spinner);
+                cont.appendChild(wrapper);
+
+                const label = document.createElement('div');
+                label.className = 'page-label';
+                label.textContent = 'Page ' + i;
+                cont.appendChild(label);
+            }
+
+            const observer = new IntersectionObserver(entries => {
+                entries.forEach(entry => {
+                    if (entry.isIntersecting) renderPage(parseInt(entry.target.dataset.page, 10));
+                });
+            }, { root: cont, rootMargin: '300px' });
+
+            document.querySelectorAll('.pdf-page-wrapper').forEach(el => observer.observe(el));
+
+            cont.onscroll = () => {
+                const rect = cont.getBoundingClientRect();
+                const center = rect.top + rect.height * 0.3;
+                let closest = 1, minDist = Infinity;
+                document.querySelectorAll('.pdf-page-wrapper').forEach(w => {
+                    const r = w.getBoundingClientRect();
+                    const d = Math.abs((r.top + r.height / 2) - center);
+                    if (d < minDist) { minDist = d; closest = parseInt(w.dataset.page, 10); }
+                });
+                if (closest !== currentPage) syncPdfPageChange(closest);
+            };
+        }
+
+        async function renderPage(num) {
+            if (rendered.has(num) || !pdfDoc) return;
+            rendered.add(num);
+            try {
+                const page = await pdfDoc.getPage(num);
+                const vp = page.getViewport({ scale });
+                const dpr = window.devicePixelRatio || 1;
+
+                const cvs = document.createElement('canvas');
+                cvs.width = vp.width * dpr;
+                cvs.height = vp.height * dpr;
+                cvs.style.width = vp.width + 'px';
+                cvs.style.height = vp.height + 'px';
+                const ctx = cvs.getContext('2d');
+                ctx.scale(dpr, dpr);
+
+                await page.render({ canvasContext: ctx, viewport: vp }).promise;
+
+                const w = document.getElementById('page-' + num);
+                if (w) {
+                    w.innerHTML = '';
+                    w.appendChild(cvs);
+                }
+            } catch (err) {
+                console.error('Failed to render page', num, err);
+                rendered.delete(num);
+                const w = document.getElementById('page-' + num);
+                if (w) w.innerHTML = '<div style="color:#c33;font-size:12px;padding:8px;">Render failed</div>';
+            }
+        }
+
+        function updateNotesPageIndicator() {
+            if (!fileKey) {
+                $('notesPageIndicator').textContent = 'No file';
+                $('btn-notes-prev').disabled = true;
+                $('btn-notes-next').disabled = true;
+                $('btn-add-page').disabled = true;
+                $('btn-delete-page').disabled = true;
+                return;
+            }
+            $('notesPageIndicator').textContent = `Page ${sketchPage} / ${sketchPageCount}`;
+            $('btn-notes-prev').disabled = (sketchPage <= 1);
+            $('btn-notes-next').disabled = (sketchPage >= sketchPageCount);
+            $('btn-add-page').disabled = false;
+            $('btn-delete-page').disabled = (sketchPageCount <= 1);
+        }
+
+        // PDF viewer's own page change — purely visual, never touches the sketchpad.
+        function syncPdfPageChange(newPage) {
+            currentPage = newPage;
+            $('pageInput').value = currentPage;
+        }
+
+        function goToPage(n) {
+            if (!pdfDoc) return;
+            n = Math.max(1, Math.min(totalPages, n));
+            if (n !== currentPage) syncPdfPageChange(n);
+            const el = document.getElementById('page-' + n);
+            if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }
+
+        function prevPage() { goToPage(currentPage - 1); }
+        function nextPage() { goToPage(currentPage + 1); }
+        $('pageInput').addEventListener('change', e => goToPage(parseInt(e.target.value, 10) || 1));
+
+        // ---- Sketchpad page navigation — fully independent of the PDF ----
+        function sketchSyncPageChange(newPage) {
+            saveCanvasData();
+            sketchPage = newPage;
+            updateNotesPageIndicator();
+            loadCanvasData(sketchPage);
+        }
+
+        function sketchGoToPage(n) {
+            if (!fileKey) { showToast('Open a PDF first'); return; }
+            n = Math.max(1, Math.min(sketchPageCount, n));
+            if (n === sketchPage) return;
+            sketchSyncPageChange(n);
+        }
+        function sketchPrevPage() { sketchGoToPage(sketchPage - 1); }
+        function sketchNextPage() { sketchGoToPage(sketchPage + 1); }
+
+        function addSketchPage() {
+            if (!fileKey) { showToast('Open a PDF first'); return; }
+            sketchPageCount += 1;
+            saveSketchPageCount();
+            showToast(`✓ Added page ${sketchPageCount}`);
+            sketchGoToPage(sketchPageCount);
+        }
+
+        function deleteSketchPage() {
+            if (!fileKey || sketchPageCount <= 1) return;
+            const pageToDelete = sketchPageCount; // only the last page can be removed safely
+            if (sketchPage !== pageToDelete) {
+                showToast('Only the last page can be deleted — go to it first');
+                return;
+            }
+            if (!confirm(`Delete page ${pageToDelete}? This cannot be undone.`)) return;
+
+            Store.remove(sketchStorageKey(fileKey, pageToDelete));
+            sketchPageCount -= 1;
+            saveSketchPageCount();
+            showToast('Page deleted');
+            sketchGoToPage(sketchPageCount);
+        }
+
+        function zoomIn() { if (!pdfDoc) return; scale = Math.min(4, Math.round((scale + 0.2) * 10) / 10); applyZoom(); }
+        function zoomOut() { if (!pdfDoc) return; scale = Math.max(0.3, Math.round((scale - 0.2) * 10) / 10); applyZoom(); }
+        function fitToWidth() {
+            if (!pdfDoc) return;
+            const cw = $('pdfContainer').clientWidth - 48;
+            if (cw > 0) { scale = Math.round((cw / basePageWidth) * 100) / 100; applyZoom(); }
+        }
+        async function applyZoom() {
+            $('zoomInfo').textContent = Math.round(scale * 100) + '%';
+            await buildPages();
+        }
+
+        // ========== PDF Export ==========
+        function pageHasNotes(jsonStr) {
+            if (!jsonStr) return false;
+            try {
+                const parsed = JSON.parse(jsonStr);
+                if (!Array.isArray(parsed.objects) || parsed.objects.length === 0) return false;
+
+                // Filter out objects that are technically present but produce no visible
+                // mark: fully transparent/invisible objects, zero-area paths (a stray click
+                // that started and ended a stroke without ever moving), or objects whose
+                // bounding box falls entirely outside the page. Without this, pages that
+                // look empty in the editor still get exported as full rasterized images.
+                return parsed.objects.some(obj => {
+                    if (obj.opacity === 0 || obj.visible === false) return false;
+                    const w = obj.width || 0, h = obj.height || 0;
+                    if (w <= 0.5 && h <= 0.5) return false; // degenerate stroke/shape
+                    const left = obj.left ?? 0, top = obj.top ?? 0;
+                    const onPage = (left + w > 0) && (left < PAGE_W) && (top + h > 0) && (top < PAGE_H);
+                    return onPage;
+                });
+            } catch (e) {
+                return false; // corrupt/unreadable entry — treat as empty rather than guessing
+            }
+        }
+
+        // Promise-based canvas load so export can safely await completion instead of a fixed timeout.
+        function loadCanvasDataAsync(pageNum) {
+            return new Promise(resolve => loadCanvasData(pageNum, resolve));
+        }
+
+        async function exportToPDF() {
+            if (!fileKey) { showToast('No file open!'); return; }
+            if (!window.jspdf) { showToast('PDF generator still loading, try again shortly'); return; }
+
+            const exportBtn = $('exportBtn');
+            exportBtn.disabled = true;
+            const originalLabel = exportBtn.textContent;
+            exportBtn.textContent = 'Exporting…';
+            showToast('Generating notes PDF…');
+
+            try {
+                const { jsPDF } = window.jspdf;
+                const doc = new jsPDF({ orientation: 'p', unit: 'px', format: [PAGE_W, PAGE_H] });
+
+                saveCanvasData(); // flush whatever's currently on screen before scanning
+
+                let pagesWithNotes = [];
+                for (let p = 1; p <= sketchPageCount; p++) {
+                    const data = Store.get(sketchStorageKey(fileKey, p));
+                    if (pageHasNotes(data)) pagesWithNotes.push(p);
+                }
+
+                if (pagesWithNotes.length === 0) {
+                    pagesWithNotes = [1]; // export at least something so the action isn't a no-op
+                }
+
+                const originalSketchPage = sketchPage;
+                const originalVPT = canvas.viewportTransform.slice();
+                const originalBg = canvas.backgroundColor;
+                canvas.viewportTransform = [1, 0, 0, 1, 0, 0];
+
+                for (let i = 0; i < pagesWithNotes.length; i++) {
+                    const p = pagesWithNotes[i];
+                    if (i > 0) doc.addPage([PAGE_W, PAGE_H]);
+
+                    await loadCanvasDataAsync(p); // properly awaited — no more fixed setTimeout guess
+
+                    canvas.backgroundColor = $('bgColor').value || '#ffffff';
+                    canvas.requestRenderAll();
+                    await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r))); // wait for paint
+
+                    const imgData = canvas.toDataURL({
+                        format: 'png',
+                        quality: 1.0,
+                        left: 0, top: 0,
+                        width: PAGE_W, height: PAGE_H
+                    });
+
+                    doc.addImage(imgData, 'PNG', 0, 0, PAGE_W, PAGE_H);
+                    doc.setFontSize(14);
+                    doc.setTextColor(150, 150, 150);
+                    doc.text(`Page ${p}`, 20, PAGE_H - 20);
+                }
+
+                canvas.backgroundColor = originalBg;
+                canvas.viewportTransform = originalVPT;
+                await loadCanvasDataAsync(originalSketchPage);
+                updateBgTransform();
+
+                doc.save(`SketchNotes-${fileLabel.replace(/\.pdf$/i, '')}.pdf`);
+                showToast('✓ Export complete');
+            } catch (err) {
+                console.error(err);
+                showToast('⚠ Export failed: ' + (err.message || 'unknown error'), true);
+            } finally {
+                exportBtn.disabled = false;
+                exportBtn.textContent = originalLabel;
+            }
+        }
+
+        // ========== Split resizer ==========
+        let isResizing = false;
+        $('resizer').addEventListener('pointerdown', e => {
+            isResizing = true;
+            $('resizer').classList.add('active');
+            e.preventDefault();
+        });
+        document.addEventListener('pointermove', e => {
+            if (!isResizing) return;
+            const main = document.querySelector('.main').getBoundingClientRect();
+            const pct = ((main.right - e.clientX) / main.width) * 100;
+            if (pct > 20 && pct < 80) $('notesPane').style.width = pct + '%';
+        });
+        document.addEventListener('pointerup', () => {
+            isResizing = false;
+            $('resizer').classList.remove('active');
+        });
+
+        // ========== Toast ==========
+        let toastTimer = null;
+        function showToast(msg, isError) {
+            const t = $('toast');
+            t.textContent = msg;
+            t.classList.toggle('toast-error', !!isError);
+            t.classList.add('show');
+            if (toastTimer) clearTimeout(toastTimer);
+            toastTimer = setTimeout(() => t.classList.remove('show'), 3000);
+        }
+
+        window.onload = initCanvas;
+    </script>
+</body>
+</html>
