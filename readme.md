@@ -1,4 +1,4 @@
-# PageNotes — Sketchpad Reader
+# PageNotes — Scratchpad Reader
 
 A split-pane study tool that puts a PDF, a YouTube video, or a local video file on one side and a freeform sketchpad on the other — so you can read, watch, and take notes at the same time, without switching apps.
 
