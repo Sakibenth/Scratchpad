@@ -154,6 +154,28 @@
         .drop-subtitle { font-size: 13px; color: var(--text-secondary); }
         .drop-error { font-size: 13px; color: var(--red); margin-top: 4px; min-height: 16px; }
 
+        .source-divider {
+            display: flex; align-items: center; width: 100%; max-width: 420px; color: var(--text-muted); font-size: 12px;
+        }
+        .source-divider::before, .source-divider::after { content: ''; flex: 1; height: 1px; background: var(--border); }
+        .source-divider span { padding: 0 12px; }
+
+        .yt-entry {
+            width: 100%; max-width: 420px; padding: 24px 28px; border: 1px solid var(--border); border-radius: 16px; text-align: center; background: rgba(255, 255, 255, 0.015); cursor: default;
+        }
+        .yt-input-row { display: flex; gap: 8px; margin-top: 12px; }
+        .yt-url-input {
+            flex: 1; padding: 9px 12px; background: var(--bg-elevated); border: 1px solid var(--border); color: var(--text-primary); border-radius: 8px; font-family: inherit; font-size: 13px; outline: none;
+        }
+        .yt-url-input:focus { border-color: var(--accent); }
+
+        .youtube-container { flex: 1; display: none; align-items: center; justify-content: center; padding: 20px; background: var(--bg-page); }
+        .yt-frame-stack { width: 100%; max-width: 960px; display: flex; flex-direction: column; gap: 10px; }
+        .yt-frame-wrap { width: 100%; aspect-ratio: 16 / 9; background: #000; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 20px rgba(0,0,0,0.5); }
+        .yt-frame-wrap iframe { width: 100%; height: 100%; border: none; }
+        .yt-fallback-note { font-size: 12px; color: var(--text-muted); text-align: center; line-height: 1.5; }
+        .yt-fallback-note a { color: var(--accent-light); text-decoration: underline; }
+
         /* ========== Resizer ========== */
         .resizer {
             width: 5px; cursor: col-resize; background: var(--border); position: relative; flex-shrink: 0; transition: background 0.2s; z-index: 10;
@@ -296,6 +318,7 @@
         </div>
         <div class="header-right">
             <button class="btn btn-primary" onclick="openFile()" id="openBtn">Open PDF</button>
+            <button class="btn" onclick="openYouTubePrompt()" id="openYtBtn">+ YouTube</button>
             <button class="btn" onclick="exportToPDF()" id="exportBtn" disabled>Export Notes PDF</button>
         </div>
     </header>
@@ -322,6 +345,27 @@
                     <div class="drop-title">Open a PDF to begin</div>
                     <div class="drop-subtitle">Drag &amp; drop a file here</div>
                     <div class="drop-error" id="dropError"></div>
+                </div>
+                <div class="source-divider"><span>or</span></div>
+                <div class="yt-entry" id="ytEntry" onclick="event.stopPropagation()">
+                    <div class="drop-title" style="font-size:15px;">Paste a YouTube link</div>
+                    <div class="yt-input-row">
+                        <input type="text" id="ytUrlInput" class="yt-url-input" placeholder="https://youtube.com/watch?v=...">
+                        <button class="btn btn-primary" onclick="loadYouTubeVideo($('ytUrlInput').value)">Load</button>
+                    </div>
+                    <div class="drop-error" id="ytError"></div>
+                </div>
+            </div>
+
+            <div class="youtube-container" id="youtubeContainer">
+                <div class="yt-frame-stack">
+                    <div class="yt-frame-wrap">
+                        <iframe id="ytFrame" src="" frameborder="0" referrerpolicy="strict-origin-when-cross-origin" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" allowfullscreen></iframe>
+                    </div>
+                    <div class="yt-fallback-note">
+                        Video not loading? Some browsers/embeds block YouTube's player.
+                        <a id="ytFallbackLink" href="#" target="_blank" rel="noopener">Open it on YouTube instead</a> — keep this tab open to sketch alongside it.
+                    </div>
                 </div>
             </div>
 
@@ -799,7 +843,7 @@
         }
 
         function clearCanvas() {
-            if (!fileKey) { showToast('Open a PDF first'); return; }
+            if (!fileKey) { showToast('Open a PDF or video first'); return; }
             if (confirm('Clear notes for this page? This cannot be undone.')) {
                 canvas.clear();
                 saveCanvasData();
@@ -915,6 +959,17 @@
             $('dropError').textContent = msg || '';
         }
 
+        // Ensures only one of the three left-pane states (empty / PDF / video) is visible
+        // at a time. Always call this before showing a specific state, so switching from
+        // a loaded video back to a PDF (or vice versa) never leaves stale UI behind.
+        function resetSourcePaneVisuals() {
+            $('emptyState').style.display = 'none';
+            $('emptyCanvasOverlay').style.display = 'none';
+            $('pdfContainer').style.display = 'none';
+            $('pdfToolbar').style.display = 'none';
+            $('youtubeContainer').style.display = 'none';
+        }
+
         async function loadPDF(file) {
             setDropError('');
 
@@ -922,6 +977,9 @@
                 setDropError('Please choose a PDF file.');
                 return;
             }
+
+            // Tear down any active YouTube session before loading a PDF.
+            stopYouTubeVideo();
 
             try {
                 // Collision-resistant key: name + size + last-modified avoids clobbering notes
@@ -937,8 +995,7 @@
                 $('totalPages').textContent = totalPages;
                 loadSketchPageCount();
 
-                $('emptyState').style.display = 'none';
-                $('emptyCanvasOverlay').style.display = 'none';
+                resetSourcePaneVisuals();
                 $('pdfContainer').style.display = 'flex';
                 $('pdfToolbar').style.display = 'flex';
                 $('exportBtn').disabled = false;
@@ -963,6 +1020,8 @@
                 showToast(`📄 Loaded ${fileLabel}`);
             } catch (err) {
                 console.error(err);
+                resetSourcePaneVisuals();
+                $('emptyState').style.display = 'flex';
                 setDropError('Could not open this PDF — it may be corrupted or password-protected.');
                 showToast('⚠ Failed to load PDF', true);
                 pdfDoc = null;
@@ -970,6 +1029,101 @@
                 $('exportBtn').disabled = true;
             }
         }
+
+        // ========== YouTube Source ==========
+        // Accepts full URLs (watch?v=, youtu.be/, embed/, shorts/) or a bare 11-char video ID.
+        function extractYouTubeId(input) {
+            if (!input) return null;
+            const trimmed = input.trim();
+
+            if (/^[a-zA-Z0-9_-]{11}$/.test(trimmed)) return trimmed;
+
+            try {
+                const url = new URL(trimmed);
+                const host = url.hostname.replace(/^www\./, '');
+
+                if (host === 'youtu.be') {
+                    const id = url.pathname.slice(1).split('/')[0];
+                    return /^[a-zA-Z0-9_-]{11}$/.test(id) ? id : null;
+                }
+                if (host === 'youtube.com' || host === 'm.youtube.com' || host === 'music.youtube.com') {
+                    if (url.pathname === '/watch') {
+                        const id = url.searchParams.get('v');
+                        return id && /^[a-zA-Z0-9_-]{11}$/.test(id) ? id : null;
+                    }
+                    const embedMatch = url.pathname.match(/^\/(embed|shorts|live)\/([a-zA-Z0-9_-]{11})/);
+                    if (embedMatch) return embedMatch[2];
+                }
+            } catch (e) {
+                return null; // not a valid URL and not a bare ID
+            }
+            return null;
+        }
+
+        function setYtError(msg) {
+            $('ytError').textContent = msg || '';
+        }
+
+        // Header "+ YouTube" button: tears down whatever's currently loaded and brings the
+        // user back to the empty state's URL field so they can paste a new link, rather
+        // than popping a disruptive native prompt() dialog.
+        function openYouTubePrompt() {
+            stopYouTubeVideo();
+            resetSourcePaneVisuals();
+            $('emptyState').style.display = 'flex';
+            setDropError('');
+            setYtError('');
+            $('ytUrlInput').value = '';
+            $('ytUrlInput').focus();
+        }
+
+        function loadYouTubeVideo(rawInput) {
+            setYtError('');
+            const videoId = extractYouTubeId(rawInput);
+
+            if (!videoId) {
+                setYtError('Could not recognize that as a YouTube link. Try pasting the full URL.');
+                return;
+            }
+
+            // Tear down any active PDF session before loading a video.
+            pdfDoc = null;
+            totalPages = 0;
+
+            fileKey = `youtube__${videoId}`;
+            fileLabel = `YouTube: ${videoId}`;
+            $('fileName').textContent = fileLabel;
+            $('fileName').title = `https://youtube.com/watch?v=${videoId}`;
+            $('ytFallbackLink').href = `https://www.youtube.com/watch?v=${videoId}`;
+
+            loadSketchPageCount();
+
+            resetSourcePaneVisuals();
+            $('youtubeContainer').style.display = 'flex';
+            $('exportBtn').disabled = false;
+
+            // youtube-nocookie.com is used instead of youtube.com here specifically because
+            // the standard domain frequently triggers "Error 153: Video player configuration
+            // error" when embedded inside sandboxed/restrictive iframe contexts (like this
+            // artifact preview) that don't send a referrer header the way youtube.com expects.
+            $('ytFrame').src = `https://www.youtube-nocookie.com/embed/${videoId}?rel=0`;
+
+            sketchPage = 1; // sketchpad always opens on its own page 1, independent of the video
+            updateNotesPageIndicator();
+            loadCanvasData(sketchPage);
+
+            showToast('▶ Video loaded — sketch alongside it');
+        }
+
+        function stopYouTubeVideo() {
+            const frame = $('ytFrame');
+            if (frame.src) frame.src = ''; // stop playback/audio when switching away
+            $('youtubeContainer').style.display = 'none';
+        }
+
+        $('ytUrlInput').addEventListener('keydown', e => {
+            if (e.key === 'Enter') loadYouTubeVideo($('ytUrlInput').value);
+        });
 
         const rendered = new Set();
 
@@ -1093,7 +1247,7 @@
         }
 
         function sketchGoToPage(n) {
-            if (!fileKey) { showToast('Open a PDF first'); return; }
+            if (!fileKey) { showToast('Open a PDF or video first'); return; }
             n = Math.max(1, Math.min(sketchPageCount, n));
             if (n === sketchPage) return;
             sketchSyncPageChange(n);
@@ -1102,7 +1256,7 @@
         function sketchNextPage() { sketchGoToPage(sketchPage + 1); }
 
         function addSketchPage() {
-            if (!fileKey) { showToast('Open a PDF first'); return; }
+            if (!fileKey) { showToast('Open a PDF or video first'); return; }
             sketchPageCount += 1;
             saveSketchPageCount();
             showToast(`✓ Added page ${sketchPageCount}`);
@@ -1167,8 +1321,54 @@
             return new Promise(resolve => loadCanvasData(pageNum, resolve));
         }
 
+        // Renders the currently selected page style (blank/lined/grid) onto an offscreen
+        // canvas, matching the exact geometry of the CSS gradients used for the on-screen
+        // #pageBackground div. The live page background is pure CSS and isn't part of the
+        // Fabric canvas, so canvas.toDataURL() never captures it — without this, exported
+        // pages always come out blank even when lines/grid are visible on screen.
+        function renderPageStyleBackground(bgHex, style, gridColor) {
+            const off = document.createElement('canvas');
+            off.width = PAGE_W;
+            off.height = PAGE_H;
+            const ctx = off.getContext('2d');
+
+            ctx.fillStyle = bgHex;
+            ctx.fillRect(0, 0, PAGE_W, PAGE_H);
+
+            if (style === 'lined') {
+                ctx.strokeStyle = gridColor;
+                ctx.lineWidth = 1;
+                for (let y = 32; y < PAGE_H; y += 32) {
+                    ctx.beginPath();
+                    ctx.moveTo(0, y - 0.5);
+                    ctx.lineTo(PAGE_W, y - 0.5);
+                    ctx.stroke();
+                }
+                ctx.fillStyle = 'rgba(248, 113, 113, 0.4)'; // matches --margin-color
+                ctx.fillRect(40, 0, 2, PAGE_H);
+            } else if (style === 'grid') {
+                ctx.strokeStyle = gridColor;
+                ctx.lineWidth = 1;
+                for (let x = 0; x <= PAGE_W; x += 20) {
+                    ctx.beginPath();
+                    ctx.moveTo(x - 0.5, 0);
+                    ctx.lineTo(x - 0.5, PAGE_H);
+                    ctx.stroke();
+                }
+                for (let y = 0; y <= PAGE_H; y += 20) {
+                    ctx.beginPath();
+                    ctx.moveTo(0, y - 0.5);
+                    ctx.lineTo(PAGE_W, y - 0.5);
+                    ctx.stroke();
+                }
+            }
+            // 'blank' style: solid fill only, already applied above.
+
+            return off.toDataURL('image/png');
+        }
+
         async function exportToPDF() {
-            if (!fileKey) { showToast('No file open!'); return; }
+            if (!fileKey) { showToast('No PDF or video open!'); return; }
             if (!window.jspdf) { showToast('PDF generator still loading, try again shortly'); return; }
 
             const exportBtn = $('exportBtn');
@@ -1226,7 +1426,8 @@
                 await loadCanvasDataAsync(originalSketchPage);
                 updateBgTransform();
 
-                doc.save(`SketchNotes-${fileLabel.replace(/\.pdf$/i, '')}.pdf`);
+                const safeName = fileLabel.replace(/\.pdf$/i, '').replace(/[\\/:*?"<>|]+/g, '_');
+                doc.save(`SketchNotes-${safeName}.pdf`);
                 showToast('✓ Export complete');
             } catch (err) {
                 console.error(err);
