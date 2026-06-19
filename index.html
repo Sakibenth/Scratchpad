@@ -176,6 +176,11 @@
         .yt-fallback-note { font-size: 12px; color: var(--text-muted); text-align: center; line-height: 1.5; }
         .yt-fallback-note a { color: var(--accent-light); text-decoration: underline; }
 
+        .local-video-container { flex: 1; display: none; align-items: center; justify-content: center; padding: 20px; background: var(--bg-page); }
+        #localVideoPlayer {
+            width: 100%; max-width: 960px; max-height: 100%; background: #000; border-radius: 8px; box-shadow: 0 2px 20px rgba(0,0,0,0.5);
+        }
+
         /* ========== Resizer ========== */
         .resizer {
             width: 5px; cursor: col-resize; background: var(--border); position: relative; flex-shrink: 0; transition: background 0.2s; z-index: 10;
@@ -306,6 +311,7 @@
 </head>
 <body>
     <input type="file" id="fileInput" accept=".pdf,application/pdf" hidden>
+    <input type="file" id="videoFileInput" accept="video/*" hidden>
 
     <header class="header">
         <div class="header-left">
@@ -318,6 +324,7 @@
         </div>
         <div class="header-right">
             <button class="btn btn-primary" onclick="openFile()" id="openBtn">Open PDF</button>
+            <button class="btn" onclick="openLocalVideoFile()" id="openVideoBtn">Open Video</button>
             <button class="btn" onclick="openYouTubePrompt()" id="openYtBtn">+ YouTube</button>
             <button class="btn" onclick="exportToPDF()" id="exportBtn" disabled>Export Notes PDF</button>
         </div>
@@ -347,6 +354,12 @@
                     <div class="drop-error" id="dropError"></div>
                 </div>
                 <div class="source-divider"><span>or</span></div>
+                <div class="drop-zone" id="videoDropZone" onclick="openLocalVideoFile()">
+                    <div class="drop-title">Open a video file</div>
+                    <div class="drop-subtitle">Drag &amp; drop a video here</div>
+                    <div class="drop-error" id="videoDropError"></div>
+                </div>
+                <div class="source-divider"><span>or</span></div>
                 <div class="yt-entry" id="ytEntry" onclick="event.stopPropagation()">
                     <div class="drop-title" style="font-size:15px;">Paste a YouTube link</div>
                     <div class="yt-input-row">
@@ -367,6 +380,10 @@
                         <a id="ytFallbackLink" href="#" target="_blank" rel="noopener">Open it on YouTube instead</a> — keep this tab open to sketch alongside it.
                     </div>
                 </div>
+            </div>
+
+            <div class="local-video-container" id="localVideoContainer">
+                <video id="localVideoPlayer" controls></video>
             </div>
 
             <div class="pdf-container" id="pdfContainer"></div>
@@ -959,15 +976,16 @@
             $('dropError').textContent = msg || '';
         }
 
-        // Ensures only one of the three left-pane states (empty / PDF / video) is visible
-        // at a time. Always call this before showing a specific state, so switching from
-        // a loaded video back to a PDF (or vice versa) never leaves stale UI behind.
+        // Ensures only one of the four left-pane states (empty / PDF / YouTube / local video)
+        // is visible at a time. Always call this before showing a specific state, so
+        // switching sources never leaves stale UI behind.
         function resetSourcePaneVisuals() {
             $('emptyState').style.display = 'none';
             $('emptyCanvasOverlay').style.display = 'none';
             $('pdfContainer').style.display = 'none';
             $('pdfToolbar').style.display = 'none';
             $('youtubeContainer').style.display = 'none';
+            $('localVideoContainer').style.display = 'none';
         }
 
         async function loadPDF(file) {
@@ -978,8 +996,9 @@
                 return;
             }
 
-            // Tear down any active YouTube session before loading a PDF.
+            // Tear down any active YouTube or local-video session before loading a PDF.
             stopYouTubeVideo();
+            stopLocalVideo();
 
             try {
                 // Collision-resistant key: name + size + last-modified avoids clobbering notes
@@ -1069,9 +1088,11 @@
         // than popping a disruptive native prompt() dialog.
         function openYouTubePrompt() {
             stopYouTubeVideo();
+            stopLocalVideo();
             resetSourcePaneVisuals();
             $('emptyState').style.display = 'flex';
             setDropError('');
+            setVideoDropError('');
             setYtError('');
             $('ytUrlInput').value = '';
             $('ytUrlInput').focus();
@@ -1086,9 +1107,10 @@
                 return;
             }
 
-            // Tear down any active PDF session before loading a video.
+            // Tear down any active PDF or local-video session before loading a YouTube video.
             pdfDoc = null;
             totalPages = 0;
+            stopLocalVideo();
 
             fileKey = `youtube__${videoId}`;
             fileLabel = `YouTube: ${videoId}`;
@@ -1124,6 +1146,74 @@
         $('ytUrlInput').addEventListener('keydown', e => {
             if (e.key === 'Enter') loadYouTubeVideo($('ytUrlInput').value);
         });
+
+        // ========== Local Video Source ==========
+        let localVideoObjectUrl = null; // tracked so we can revoke it and avoid leaking memory
+
+        $('videoFileInput').addEventListener('change', e => {
+            if (e.target.files[0]) loadLocalVideo(e.target.files[0]);
+        });
+
+        function openLocalVideoFile() { $('videoFileInput').click(); }
+
+        function setVideoDropError(msg) {
+            $('videoDropError').textContent = msg || '';
+        }
+
+        $('videoDropZone').addEventListener('dragover', e => { e.preventDefault(); $('videoDropZone').style.borderColor = 'var(--accent)'; });
+        $('videoDropZone').addEventListener('dragleave', () => { $('videoDropZone').style.borderColor = 'var(--border)'; });
+        $('videoDropZone').addEventListener('drop', e => {
+            e.preventDefault();
+            $('videoDropZone').style.borderColor = 'var(--border)';
+            if (e.dataTransfer.files[0]) loadLocalVideo(e.dataTransfer.files[0]);
+        });
+
+        function loadLocalVideo(file) {
+            setVideoDropError('');
+
+            if (!file.type.startsWith('video/')) {
+                setVideoDropError('Please choose a video file.');
+                return;
+            }
+
+            // Tear down any active PDF or YouTube session before loading a local video.
+            pdfDoc = null;
+            totalPages = 0;
+            stopYouTubeVideo();
+            stopLocalVideo(); // also releases any previously loaded local video's blob URL
+
+            fileKey = `localvideo__${file.name}__${file.size}__${file.lastModified}`;
+            fileLabel = file.name;
+            $('fileName').textContent = fileLabel;
+            $('fileName').title = fileLabel;
+
+            loadSketchPageCount();
+
+            resetSourcePaneVisuals();
+            $('localVideoContainer').style.display = 'flex';
+            $('exportBtn').disabled = false;
+
+            localVideoObjectUrl = URL.createObjectURL(file);
+            $('localVideoPlayer').src = localVideoObjectUrl;
+
+            sketchPage = 1; // sketchpad always opens on its own page 1, independent of the video
+            updateNotesPageIndicator();
+            loadCanvasData(sketchPage);
+
+            showToast(`▶ Loaded ${fileLabel}`);
+        }
+
+        function stopLocalVideo() {
+            const player = $('localVideoPlayer');
+            player.pause();
+            player.removeAttribute('src');
+            player.load(); // forces the browser to release the previous source
+            if (localVideoObjectUrl) {
+                URL.revokeObjectURL(localVideoObjectUrl); // prevents a memory leak from the blob URL
+                localVideoObjectUrl = null;
+            }
+            $('localVideoContainer').style.display = 'none';
+        }
 
         const rendered = new Set();
 
