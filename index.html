@@ -11,6 +11,7 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/fabric.js/5.3.1/fabric.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/svg2pdf.js@2.4.0/dist/svg2pdf.umd.min.js"></script>
 
     <style>
         /* ========== CSS Variables ========== */
@@ -1411,50 +1412,49 @@
             return new Promise(resolve => loadCanvasData(pageNum, resolve));
         }
 
-        // Renders the currently selected page style (blank/lined/grid) onto an offscreen
-        // canvas, matching the exact geometry of the CSS gradients used for the on-screen
-        // #pageBackground div. The live page background is pure CSS and isn't part of the
-        // Fabric canvas, so canvas.toDataURL() never captures it — without this, exported
-        // pages always come out blank even when lines/grid are visible on screen.
-        function renderPageStyleBackground(bgHex, style, gridColor) {
-            const off = document.createElement('canvas');
-            off.width = PAGE_W;
-            off.height = PAGE_H;
-            const ctx = off.getContext('2d');
+        // Converts a "#rrggbb" hex string to an [r, g, b] triplet (0-255 each) for jsPDF's
+        // setFillColor/setDrawColor, which expect numeric RGB rather than CSS hex strings.
+        function hexToRgbTriplet(hex) {
+            if (!hex || hex.length !== 7) return [255, 255, 255];
+            return [
+                parseInt(hex.substr(1, 2), 16),
+                parseInt(hex.substr(3, 2), 16),
+                parseInt(hex.substr(5, 2), 16)
+            ];
+        }
 
-            ctx.fillStyle = bgHex;
-            ctx.fillRect(0, 0, PAGE_W, PAGE_H);
+        // Draws the page background (solid fill + lined/grid rules) directly into the PDF
+        // using jsPDF's native vector primitives — no rasterization at all. Matches the exact
+        // geometry of the on-screen CSS gradients (32px rule spacing, 20px grid, 40-42px red
+        // margin) so the exported page looks the same as what's visible in the editor.
+        function drawPageStyleBackground(doc, bgHex, style, isLightBg) {
+            const [br, bg_, bb] = hexToRgbTriplet(bgHex);
+            doc.setFillColor(br, bg_, bb);
+            doc.rect(0, 0, PAGE_W, PAGE_H, 'F');
+
+            const lineRgb = isLightBg ? [0, 0, 0] : [255, 255, 255];
+            const lineAlpha = isLightBg ? 0.25 : 0.2;
 
             if (style === 'lined') {
-                ctx.strokeStyle = gridColor;
-                ctx.lineWidth = 1;
+                doc.setDrawColor(lineRgb[0], lineRgb[1], lineRgb[2]);
+                if (doc.setGState && doc.GState) doc.setGState(new doc.GState({ opacity: lineAlpha }));
+                doc.setLineWidth(1);
                 for (let y = 32; y < PAGE_H; y += 32) {
-                    ctx.beginPath();
-                    ctx.moveTo(0, y - 0.5);
-                    ctx.lineTo(PAGE_W, y - 0.5);
-                    ctx.stroke();
+                    doc.line(0, y, PAGE_W, y);
                 }
-                ctx.fillStyle = 'rgba(248, 113, 113, 0.4)'; // matches --margin-color
-                ctx.fillRect(40, 0, 2, PAGE_H);
+                if (doc.setGState && doc.GState) doc.setGState(new doc.GState({ opacity: 0.4 }));
+                doc.setFillColor(248, 113, 113);
+                doc.rect(40, 0, 2, PAGE_H, 'F');
+                if (doc.setGState && doc.GState) doc.setGState(new doc.GState({ opacity: 1 }));
             } else if (style === 'grid') {
-                ctx.strokeStyle = gridColor;
-                ctx.lineWidth = 1;
-                for (let x = 0; x <= PAGE_W; x += 20) {
-                    ctx.beginPath();
-                    ctx.moveTo(x - 0.5, 0);
-                    ctx.lineTo(x - 0.5, PAGE_H);
-                    ctx.stroke();
-                }
-                for (let y = 0; y <= PAGE_H; y += 20) {
-                    ctx.beginPath();
-                    ctx.moveTo(0, y - 0.5);
-                    ctx.lineTo(PAGE_W, y - 0.5);
-                    ctx.stroke();
-                }
+                doc.setDrawColor(lineRgb[0], lineRgb[1], lineRgb[2]);
+                if (doc.setGState && doc.GState) doc.setGState(new doc.GState({ opacity: lineAlpha }));
+                doc.setLineWidth(1);
+                for (let x = 0; x <= PAGE_W; x += 20) doc.line(x, 0, x, PAGE_H);
+                for (let y = 0; y <= PAGE_H; y += 20) doc.line(0, y, PAGE_W, y);
+                if (doc.setGState && doc.GState) doc.setGState(new doc.GState({ opacity: 1 }));
             }
             // 'blank' style: solid fill only, already applied above.
-
-            return off.toDataURL('image/png');
         }
 
         async function exportToPDF() {
@@ -1471,6 +1471,15 @@
                 const { jsPDF } = window.jspdf;
                 const doc = new jsPDF({ orientation: 'p', unit: 'px', format: [PAGE_W, PAGE_H] });
 
+                // svg2pdf.js attaches a .svg() method to jsPDF instances once loaded. Checking
+                // it here (rather than guessing the plugin's global variable name) is the most
+                // reliable way to confirm vector export is actually available; if it's missing,
+                // every page below falls through to the raster fallback automatically.
+                const vectorExportAvailable = (typeof doc.svg === 'function');
+                if (!vectorExportAvailable) {
+                    console.warn('svg2pdf.js not detected — exporting with raster fallback for all pages.');
+                }
+
                 saveCanvasData(); // flush whatever's currently on screen before scanning
 
                 let pagesWithNotes = [];
@@ -1485,8 +1494,21 @@
 
                 const originalSketchPage = sketchPage;
                 const originalVPT = canvas.viewportTransform.slice();
-                const originalBg = canvas.backgroundColor;
                 canvas.viewportTransform = [1, 0, 0, 1, 0, 0];
+
+                // Background style/color come from the live picker — same value used for the
+                // on-screen page background, kept transparent on the Fabric canvas itself so
+                // only the strokes get exported as SVG (the background is drawn separately,
+                // directly as PDF vector primitives, never rasterized).
+                const bgHex = $('bgColor').value || '#ffffff';
+                const pageStyleVal = $('pageStyle').value || 'blank';
+                const [br, bgg, bb] = hexToRgbTriplet(bgHex);
+                const yiq = ((br * 299) + (bgg * 587) + (bb * 114)) / 1000;
+                const isLightBg = yiq >= 128;
+
+                const parser = new DOMParser();
+
+                let usedRasterFallback = false;
 
                 for (let i = 0; i < pagesWithNotes.length; i++) {
                     const p = pagesWithNotes[i];
@@ -1494,31 +1516,53 @@
 
                     await loadCanvasDataAsync(p); // properly awaited — no more fixed setTimeout guess
 
-                    canvas.backgroundColor = $('bgColor').value || '#ffffff';
+                    // 1) Vector background — solid fill plus lined/grid rules, drawn natively.
+                    drawPageStyleBackground(doc, bgHex, pageStyleVal, isLightBg);
+
+                    // 2) Vector strokes — ask Fabric for real SVG markup (it already knows how
+                    // to serialize every path correctly) and hand that SVG straight to jsPDF via
+                    // svg2pdf, which draws actual vector paths instead of a flattened bitmap.
+                    // Falls back to a rasterized PNG of just the strokes if vectorizing this
+                    // page fails for any reason, so one bad page never breaks the whole export.
+                    canvas.backgroundColor = 'transparent';
                     canvas.requestRenderAll();
-                    await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r))); // wait for paint
 
-                    const imgData = canvas.toDataURL({
-                        format: 'png',
-                        quality: 1.0,
-                        left: 0, top: 0,
-                        width: PAGE_W, height: PAGE_H
-                    });
+                    try {
+                        if (!vectorExportAvailable) throw new Error('svg2pdf.js not loaded');
 
-                    doc.addImage(imgData, 'PNG', 0, 0, PAGE_W, PAGE_H);
+                        const svgString = canvas.toSVG({
+                            width: PAGE_W,
+                            height: PAGE_H,
+                            viewBox: { x: 0, y: 0, width: PAGE_W, height: PAGE_H }
+                        });
+                        const svgDoc = parser.parseFromString(svgString, 'image/svg+xml');
+                        const svgEl = svgDoc.documentElement;
+                        if (svgDoc.querySelector('parsererror')) throw new Error('SVG parse error');
+
+                        await doc.svg(svgEl, { x: 0, y: 0, width: PAGE_W, height: PAGE_H });
+                    } catch (vectorErr) {
+                        console.warn('Vector export unavailable for page', p, '— using raster fallback.', vectorErr);
+                        usedRasterFallback = true;
+                        await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+                        const imgData = canvas.toDataURL({
+                            format: 'png', quality: 1.0,
+                            left: 0, top: 0, width: PAGE_W, height: PAGE_H
+                        });
+                        doc.addImage(imgData, 'PNG', 0, 0, PAGE_W, PAGE_H);
+                    }
+
                     doc.setFontSize(14);
                     doc.setTextColor(150, 150, 150);
                     doc.text(`Page ${p}`, 20, PAGE_H - 20);
                 }
 
-                canvas.backgroundColor = originalBg;
                 canvas.viewportTransform = originalVPT;
                 await loadCanvasDataAsync(originalSketchPage);
                 updateBgTransform();
 
                 const safeName = fileLabel.replace(/\.pdf$/i, '').replace(/[\\/:*?"<>|]+/g, '_');
                 doc.save(`SketchNotes-${safeName}.pdf`);
-                showToast('✓ Export complete');
+                showToast(usedRasterFallback ? '✓ Export complete (some pages used image fallback)' : '✓ Export complete (vector)');
             } catch (err) {
                 console.error(err);
                 showToast('⚠ Export failed: ' + (err.message || 'unknown error'), true);

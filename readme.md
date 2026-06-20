@@ -1,4 +1,4 @@
-# PageNotes — Scratchpad Reader
+# PageNotes — Sketchpad Reader
 
 A split-pane study tool that puts a PDF, a YouTube video, or a local video file on one side and a freeform sketchpad on the other — so you can read, watch, and take notes at the same time, without switching apps.
 
@@ -37,6 +37,8 @@ This is a convenience save, not a backup. See [Limitations](#limitations--known-
 ### Export to PDF
 
 The **Export Notes PDF** button bundles every sketchpad page that has actual content into a single downloadable PDF — one page per sketch page, labeled "Page N." Empty pages are automatically skipped. This is the only way to get your notes out of the browser permanently.
+
+Strokes are exported as real vector paths rather than flattened images, so files stay small even for pages that are mostly blank with just a few notes. If a page's strokes can't be vectorized for some reason, that page automatically falls back to a rasterized image instead of breaking the export — you'll see a note in the success toast if this happens.
 
 ---
 
@@ -85,7 +87,7 @@ your-folder/
 └── PageNotes.html
 ```
 
-External libraries (PDF.js, Fabric.js, jsPDF) are loaded from a CDN at runtime, so you'll need an internet connection the first time the page loads, even though your actual files stay local.
+External libraries (PDF.js, Fabric.js, jsPDF, svg2pdf.js) are loaded from a CDN at runtime, so you'll need an internet connection the first time the page loads, even though your actual files stay local.
 
 ---
 
@@ -95,7 +97,6 @@ External libraries (PDF.js, Fabric.js, jsPDF) are loaded from a CDN at runtime, 
 - **Storage has a size ceiling.** Browsers cap `localStorage` at roughly 5–10MB per site. Heavy sketching across many pages can hit this; the app will warn you with a toast if a save fails, but it's worth exporting periodically if you're taking a lot of notes.
 - **Clearing browser data wipes notes.** Clearing your browser's site data/cache for this page, switching browsers, or switching devices all mean your saved notes won't be there — export first if that matters to you.
 - **YouTube needs a real HTTP server**, as described above — this is a restriction from YouTube's player, not something the app can work around when run from local disk.
-- **Exported pages are rasterized images, not vector strokes.** Even simple sketches get embedded as PNGs inside the PDF, so file sizes per page are larger than the stroke data would suggest. See [Future Improvements](#future-improvements) for the planned fix.
 - **No PDF-page or video-timestamp linking.** Sketch pages are a separate notebook by design — there's no automatic association between sketch page 3 and PDF page 3, or between a note and the video's playback position at the time you wrote it.
 
 ---
@@ -104,7 +105,6 @@ External libraries (PDF.js, Fabric.js, jsPDF) are loaded from a CDN at runtime, 
 
 Roughly in order of likely usefulness:
 
-- **Vector export** — embed actual stroke paths (via SVG) into the exported PDF instead of rasterized PNGs, dramatically shrinking file size for mostly-blank pages.
 - **Optional page linking** — an opt-in way to tag a sketch page with "this goes with PDF page N" or "this goes with video timestamp 14:32," without forcing a rigid 1:1 mapping.
 - **Cloud/file-based persistence** — save notes as a portable `.json` or sidecar file next to the source PDF/video, instead of relying solely on browser local storage, so notes can move between devices and survive a cleared cache.
 - **Local video timestamp scrubbing tied to notes** — jump back to the moment in a lecture video where a particular note was written.
