@@ -16,6 +16,8 @@ Everything runs in a single HTML file, entirely in your browser. Nothing is uplo
 
 Only one source is active at a time. Switching sources cleanly stops whatever was playing before (so audio doesn't keep running in the background) and tears down the previous view.
 
+Click the file name in the header at any time to rename how it's displayed — useful for giving a YouTube video or a vaguely-named PDF a clearer label. This only changes the display name; it never affects how or where your notes are actually stored, so renaming is always safe and won't disconnect you from previously saved notes (local or on Drive).
+
 ### Independent sketchpad notebook
 
 The sketchpad on the right is its own notebook — it is **not** tied to PDF page numbers or video timestamps. It starts with one blank page, and you add more pages yourself:
@@ -38,16 +40,16 @@ This is a convenience save, not a backup. See [Limitations](#limitations--known-
 
 Once set up (see [Google Drive setup](#google-drive-setup-optional) below), a **☁ Connect Drive** button appears in the header. After connecting your Google account, you get two more buttons:
 
-- **⬆ Save to Drive** — bundles all your sketch pages for the currently open PDF/video into one small file and uploads it to your own Google Drive. Saving again later overwrites the same file rather than creating duplicates.
-- **⬇ Load from Drive** — finds that file and restores it into this browser's local storage, overwriting whatever's currently there for this file (you'll be asked to confirm first).
+- **⬆ Save to Drive** — asks you what to name the file (defaulting to its previous name, or an auto-generated one the first time), then bundles all your sketch pages for the currently open PDF/video and uploads it to your own Google Drive. Saving again later overwrites that same file rather than creating duplicates — even if you give it a different name each time, since the app remembers which Drive file belongs to which source internally.
+- **⬇ Load from Drive** — finds that file (by the link it remembers, falling back to a name search if needed) and restores it into this browser's local storage, overwriting whatever's currently there for this file (you'll be asked to confirm first, and shown the file's current name).
 
 This is entirely manual — nothing uploads or downloads automatically. It exists specifically to get your notes out of one browser's local storage so they can follow you to a different device or survive a cleared cache, without needing any server of your own.
 
-Only the JSON note data is stored on Drive — never your PDF, video file, or YouTube link. The app uses Google's `drive.file` scope, the narrowest permission Google offers: it can only see and modify files this app itself created, never anything else in your Drive.
+Only the JSON note data is stored on Drive — never your PDF, video file, or YouTube link. The app uses Google's `drive.file` scope, the narrowest permission Google offers: it can only see and modify files this app itself created, never anything else in your Drive. Renaming the file — whether through the app's save prompt or directly in Drive's own interface — never breaks the app's ability to find it again later.
 
 ### Export to PDF
 
-The **Export Notes PDF** button bundles every sketchpad page that has actual content into a single downloadable PDF — one page per sketch page, labeled "Page N." Empty pages are automatically skipped. This is the only way to get your notes out of the browser permanently.
+The **Export Notes PDF** button asks what to name the downloaded file (pre-filled with a sensible default), then bundles every sketchpad page that has actual content into a single PDF — one page per sketch page, labeled "Page N." Empty pages are automatically skipped. This is the only way to get your notes out of the browser permanently.
 
 Strokes are exported as real vector paths rather than flattened images, so files stay small even for pages that are mostly blank with just a few notes. If a page's strokes can't be vectorized for some reason, that page automatically falls back to a rasterized image instead of breaking the export — you'll see a note in the success toast if this happens.
 

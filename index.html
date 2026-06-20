@@ -81,7 +81,12 @@
 
         .divider-v { width: 1px; height: 22px; background: var(--border); }
 
-        .file-name { font-size: 13px; color: var(--text-secondary); max-width: 350px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .file-name { font-size: 13px; color: var(--text-secondary); max-width: 350px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: text; border-radius: 4px; padding: 2px 4px; }
+        .file-name:hover { background: var(--bg-hover); color: var(--text-primary); }
+        .file-name-input {
+            font-size: 13px; font-family: inherit; color: var(--text-primary); background: var(--bg-elevated);
+            border: 1px solid var(--accent); border-radius: 4px; padding: 2px 6px; max-width: 280px; outline: none;
+        }
 
         .header-right { display: flex; align-items: center; gap: 8px; }
 
@@ -332,7 +337,8 @@
                 <span>SketchReader</span>
             </div>
             <span class="divider-v"></span>
-            <span id="fileName" class="file-name">No file open</span>
+            <span id="fileName" class="file-name" onclick="startRenameFile()" title="Click to rename">No file open</span>
+            <input type="text" id="fileNameInput" class="file-name-input" hidden>
         </div>
         <div class="header-right">
             <button class="btn btn-primary" onclick="openFile()" id="openBtn">Open PDF</button>
@@ -504,7 +510,7 @@
         //      and paste it below, replacing the placeholder string.
         //
         // See the README for the full walkthrough with screenshots-equivalent detail.
-        const GOOGLE_DRIVE_CLIENT_ID = '1063137298817-cesguqarhidbq00njk8hh1ipvf13l1ep.apps.googleusercontent.com';
+        const GOOGLE_DRIVE_CLIENT_ID = 'YOUR_GOOGLE_CLIENT_ID_HERE.apps.googleusercontent.com';
         const GOOGLE_DRIVE_SCOPE = 'https://www.googleapis.com/auth/drive.file';
 
         // ========== State ==========
@@ -932,6 +938,24 @@
             sketchPageCount = (!isNaN(n) && n >= 1) ? n : 1;
         }
 
+        // A custom display name is purely cosmetic — it only ever changes fileLabel, never
+        // fileKey. fileKey (derived from the source's name/size/lastModified or video ID)
+        // is what notes are actually stored and looked up under, including on Drive, so
+        // renaming never risks orphaning or colliding with existing saved notes.
+        function customLabelKey(fkey) {
+            return `pagenotes__${fkey}__custom_label`;
+        }
+
+        function saveCustomLabel(label) {
+            if (!fileKey) return;
+            Store.set(customLabelKey(fileKey), label);
+        }
+
+        function loadCustomLabelIfAny() {
+            if (!fileKey) return null;
+            return Store.get(customLabelKey(fileKey));
+        }
+
         function saveCanvasData() {
             if (!fileKey || isLoadingPage) return;
             const key = sketchStorageKey(fileKey, sketchPage);
@@ -1017,6 +1041,50 @@
             $('dropError').textContent = msg || '';
         }
 
+        // ========== Rename notebook display name ==========
+        // Purely cosmetic — only ever touches fileLabel, never fileKey, so renaming can never
+        // orphan or collide with existing saved notes (local or on Drive).
+        function startRenameFile() {
+            if (!fileKey) return; // nothing open yet, nothing to rename
+
+            const span = $('fileName');
+            const input = $('fileNameInput');
+            input.value = fileLabel;
+            span.hidden = true;
+            input.hidden = false;
+            input.focus();
+            input.select();
+        }
+
+        function commitRenameFile() {
+            const input = $('fileNameInput');
+            const span = $('fileName');
+            const newLabel = input.value.trim();
+
+            if (newLabel) {
+                fileLabel = newLabel;
+                saveCustomLabel(fileLabel);
+                span.textContent = fileLabel;
+                span.title = 'Click to rename — ' + fileLabel;
+            }
+            // Empty input: silently keep the previous label rather than letting the
+            // notebook end up with a blank, confusing name.
+
+            input.hidden = true;
+            span.hidden = false;
+        }
+
+        function cancelRenameFile() {
+            $('fileNameInput').hidden = true;
+            $('fileName').hidden = false;
+        }
+
+        $('fileNameInput').addEventListener('keydown', e => {
+            if (e.key === 'Enter') { e.preventDefault(); commitRenameFile(); }
+            if (e.key === 'Escape') { e.preventDefault(); cancelRenameFile(); }
+        });
+        $('fileNameInput').addEventListener('blur', commitRenameFile);
+
         // Ensures only one of the four left-pane states (empty / PDF / YouTube / local video)
         // is visible at a time. Always call this before showing a specific state, so
         // switching sources never leaves stale UI behind.
@@ -1045,9 +1113,9 @@
                 // Collision-resistant key: name + size + last-modified avoids clobbering notes
                 // when two different files happen to share a filename.
                 fileKey = `${file.name}__${file.size}__${file.lastModified}`;
-                fileLabel = file.name;
+                fileLabel = loadCustomLabelIfAny() || file.name;
                 $('fileName').textContent = fileLabel;
-                $('fileName').title = fileLabel;
+                $('fileName').title = 'Click to rename — ' + fileLabel;
 
                 const arrayBuffer = await file.arrayBuffer();
                 pdfDoc = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
@@ -1154,9 +1222,9 @@
             stopLocalVideo();
 
             fileKey = `youtube__${videoId}`;
-            fileLabel = `YouTube: ${videoId}`;
+            fileLabel = loadCustomLabelIfAny() || `YouTube: ${videoId}`;
             $('fileName').textContent = fileLabel;
-            $('fileName').title = `https://youtube.com/watch?v=${videoId}`;
+            $('fileName').title = `Click to rename — https://youtube.com/watch?v=${videoId}`;
             $('ytFallbackLink').href = `https://www.youtube.com/watch?v=${videoId}`;
 
             loadSketchPageCount();
@@ -1224,9 +1292,9 @@
             stopLocalVideo(); // also releases any previously loaded local video's blob URL
 
             fileKey = `localvideo__${file.name}__${file.size}__${file.lastModified}`;
-            fileLabel = file.name;
+            fileLabel = loadCustomLabelIfAny() || file.name;
             $('fileName').textContent = fileLabel;
-            $('fileName').title = fileLabel;
+            $('fileName').title = 'Click to rename — ' + fileLabel;
 
             loadSketchPageCount();
 
@@ -1342,7 +1410,24 @@
             return err;
         }
 
-        async function driveFindFile(name) {
+        // The Drive file's own ID is cached locally per fileKey once we know it, so future
+        // saves/loads can go straight to that file instead of searching by name. This is what
+        // lets the Drive file be freely renamed (by the user, here or directly in Drive's own
+        // UI) without ever breaking the app's ability to find it again.
+        function driveFileIdKey(fkey) {
+            return `pagenotes__${fkey}__drive_file_id`;
+        }
+        function cacheDriveFileId(fkey, fileId) {
+            Store.set(driveFileIdKey(fkey), fileId);
+        }
+        function getCachedDriveFileId(fkey) {
+            return Store.get(driveFileIdKey(fkey));
+        }
+
+        // Fallback only: used when no cached file ID exists yet (first save from a new
+        // browser/device, or notes saved before this caching existed). Searches by the
+        // original auto-generated name, since older saves won't have a custom name set.
+        async function driveFindFileByName(name) {
             const q = encodeURIComponent(`name = '${name.replace(/'/g, "\\'")}' and trashed = false`);
             const res = await fetch(`https://www.googleapis.com/drive/v3/files?q=${q}&fields=files(id,name,modifiedTime)&spaces=drive`, {
                 headers: { Authorization: 'Bearer ' + driveAccessToken }
@@ -1350,6 +1435,18 @@
             if (!res.ok) throw driveAuthError(res.status);
             const data = await res.json();
             return (data.files && data.files.length > 0) ? data.files[0] : null;
+        }
+
+        // Confirms a cached file ID still actually exists and isn't trashed — IDs can go
+        // stale if the file was deleted directly in Drive's own UI.
+        async function driveFileStillExists(fileId) {
+            const res = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}?fields=id,name,trashed`, {
+                headers: { Authorization: 'Bearer ' + driveAccessToken }
+            });
+            if (res.status === 404) return null;
+            if (!res.ok) throw driveAuthError(res.status);
+            const data = await res.json();
+            return data.trashed ? null : data;
         }
 
         async function driveUploadFile(name, jsonString, existingFileId) {
@@ -1425,6 +1522,28 @@
             if (!fileKey) { showToast('Open a PDF or video first'); return; }
             if (!driveAccessToken) { showToast('Connect to Google Drive first'); return; }
 
+            // Figure out what this file is currently called on Drive (if it's been saved
+            // before), so the rename prompt defaults to the existing name instead of
+            // resetting it back to the auto-generated one on every save.
+            const cachedId = getCachedDriveFileId(fileKey);
+            let existingFile = null;
+            if (cachedId) {
+                try { existingFile = await driveFileStillExists(cachedId); }
+                catch (err) {
+                    if (err && err.isDriveAuthError) { handleDriveAuthFailure(); showToast('⚠ Google Drive session expired — please reconnect', true); return; }
+                    console.warn('Could not verify cached Drive file, will re-search by name', err);
+                }
+            }
+            if (!existingFile) {
+                try { existingFile = await driveFindFileByName(driveFileNameFor(fileKey)); }
+                catch (err) { /* fall through — treat as no existing file */ }
+            }
+
+            const defaultName = (existingFile && existingFile.name) || driveFileNameFor(fileKey);
+            const chosenName = prompt('Save to Google Drive as:', defaultName);
+            if (chosenName === null) return; // cancelled
+            const driveName = chosenName.trim() || defaultName;
+
             saveCanvasData(); // flush whatever's currently on screen
 
             const btn = $('driveSaveBtn');
@@ -1432,13 +1551,12 @@
             setDriveStatus('Saving…', 'busy');
 
             try {
-                const name = driveFileNameFor(fileKey);
-                const existing = await driveFindFile(name);
                 const bundle = buildNotesBundle();
-                await driveUploadFile(name, JSON.stringify(bundle), existing ? existing.id : null);
+                const result = await driveUploadFile(driveName, JSON.stringify(bundle), existingFile ? existingFile.id : null);
+                if (result && result.id) cacheDriveFileId(fileKey, result.id);
 
                 setDriveStatus('Saved ✓', 'ok');
-                showToast('☁ Notes saved to Google Drive');
+                showToast('☁ Notes saved to Google Drive as "' + driveName + '"');
             } catch (err) {
                 console.error(err);
                 if (err && err.isDriveAuthError) {
@@ -1461,15 +1579,19 @@
             $('driveLoadBtn').disabled = true;
 
             try {
-                const name = driveFileNameFor(fileKey);
-                const existing = await driveFindFile(name);
+                let existing = null;
+                const cachedId = getCachedDriveFileId(fileKey);
+                if (cachedId) existing = await driveFileStillExists(cachedId);
+                if (!existing) existing = await driveFindFileByName(driveFileNameFor(fileKey));
+
                 if (!existing) {
                     setDriveStatus('No saved notes found', 'err');
                     showToast('No notes for this file were found on Drive — try saving first.');
                     return;
                 }
+                cacheDriveFileId(fileKey, existing.id); // remember it for next time, however it was found
 
-                if (!confirm('Load notes from Google Drive? This will overwrite your current notes for this file in this browser.')) {
+                if (!confirm(`Load "${existing.name}" from Google Drive? This will overwrite your current notes for this file in this browser.`)) {
                     setDriveStatus('Connected', 'ok');
                     return;
                 }
@@ -1746,6 +1868,11 @@
             if (!fileKey) { showToast('No PDF or video open!'); return; }
             if (!window.jspdf) { showToast('PDF generator still loading, try again shortly'); return; }
 
+            const defaultName = fileLabel.replace(/\.pdf$/i, '').replace(/[\\/:*?"<>|]+/g, '_');
+            const chosenName = prompt('Save exported notes as:', `SketchNotes-${defaultName}`);
+            if (chosenName === null) return; // user cancelled — don't export at all
+            const safeName = (chosenName.trim() || `SketchNotes-${defaultName}`).replace(/[\\/:*?"<>|]+/g, '_');
+
             const exportBtn = $('exportBtn');
             exportBtn.disabled = true;
             const originalLabel = exportBtn.textContent;
@@ -1845,8 +1972,7 @@
                 await loadCanvasDataAsync(originalSketchPage);
                 updateBgTransform();
 
-                const safeName = fileLabel.replace(/\.pdf$/i, '').replace(/[\\/:*?"<>|]+/g, '_');
-                doc.save(`SketchNotes-${safeName}.pdf`);
+                doc.save(`${safeName}.pdf`);
                 showToast(usedRasterFallback ? '✓ Export complete (some pages used image fallback)' : '✓ Export complete (vector)');
             } catch (err) {
                 console.error(err);
