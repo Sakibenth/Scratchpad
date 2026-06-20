@@ -12,6 +12,7 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/fabric.js/5.3.1/fabric.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/svg2pdf.js@2.4.0/dist/svg2pdf.umd.min.js"></script>
+    <script src="https://accounts.google.com/gsi/client" async defer></script>
 
     <style>
         /* ========== CSS Variables ========== */
@@ -83,6 +84,16 @@
         .file-name { font-size: 13px; color: var(--text-secondary); max-width: 350px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
         .header-right { display: flex; align-items: center; gap: 8px; }
+
+        .drive-sync-group { display: flex; align-items: center; gap: 6px; }
+        .drive-status {
+            font-size: 11px; color: var(--text-secondary); font-family: 'JetBrains Mono', monospace;
+            padding: 2px 8px; border-radius: 10px; background: var(--bg-elevated); white-space: nowrap;
+            max-width: 140px; overflow: hidden; text-overflow: ellipsis;
+        }
+        .drive-status.drive-status-ok { color: var(--green); }
+        .drive-status.drive-status-busy { color: var(--yellow); }
+        .drive-status.drive-status-err { color: var(--red); }
 
         /* ========== Buttons ========== */
         .btn {
@@ -327,6 +338,13 @@
             <button class="btn btn-primary" onclick="openFile()" id="openBtn">Open PDF</button>
             <button class="btn" onclick="openLocalVideoFile()" id="openVideoBtn">Open Video</button>
             <button class="btn" onclick="openYouTubePrompt()" id="openYtBtn">+ YouTube</button>
+            <span class="divider-v"></span>
+            <div class="drive-sync-group" id="driveSyncGroup">
+                <button class="btn" onclick="connectGoogleDrive()" id="driveConnectBtn" title="Connect a Google account to back up notes to Drive">☁ Connect Drive</button>
+                <button class="btn btn-icon" onclick="saveNotesToDrive()" id="driveSaveBtn" title="Save notes for this file to Google Drive" disabled hidden>⬆</button>
+                <button class="btn btn-icon" onclick="loadNotesFromDrive()" id="driveLoadBtn" title="Load notes for this file from Google Drive" disabled hidden>⬇</button>
+                <span class="drive-status" id="driveStatus" hidden></span>
+            </div>
             <button class="btn" onclick="exportToPDF()" id="exportBtn" disabled>Export Notes PDF</button>
         </div>
     </header>
@@ -466,6 +484,28 @@
 
     <script>
         'use strict';
+
+        // ========== Google Drive Sync Configuration ==========
+        // To enable "Save Notes to Drive" / "Load Notes from Drive", you need your own free
+        // Google API Client ID (this app has no server, so it can't ship a shared one safely).
+        //
+        // Quick setup (~5 minutes, free):
+        //   1. Go to https://console.cloud.google.com/projectcreate and create a new project.
+        //   2. In the new project, go to "APIs & Services" → "Enabled APIs & services" →
+        //      "+ ENABLE APIS AND SERVICES", search for "Google Drive API", and enable it.
+        //   3. Go to "APIs & Services" → "OAuth consent screen". Choose "External", fill in
+        //      an app name and your email, and save (you can leave it in "Testing" mode —
+        //      add your own Google account under "Test users" so you can sign in).
+        //   4. Go to "APIs & Services" → "Credentials" → "+ CREATE CREDENTIALS" →
+        //      "OAuth client ID" → Application type "Web application".
+        //   5. Under "Authorized JavaScript origins", add the exact URL you'll open this app
+        //      from, e.g. http://localhost:8000 (no trailing slash, no path).
+        //   6. Copy the generated Client ID (looks like "123...apps.googleusercontent.com")
+        //      and paste it below, replacing the placeholder string.
+        //
+        // See the README for the full walkthrough with screenshots-equivalent detail.
+        const GOOGLE_DRIVE_CLIENT_ID = '1063137298817-cesguqarhidbq00njk8hh1ipvf13l1ep.apps.googleusercontent.com';
+        const GOOGLE_DRIVE_SCOPE = 'https://www.googleapis.com/auth/drive.file';
 
         // ========== State ==========
         let pdfDoc = null;
@@ -1216,6 +1256,249 @@
             $('localVideoContainer').style.display = 'none';
         }
 
+        // ========== Google Drive Sync ==========
+        // Manual save/load only — nothing here runs automatically. The user clicks
+        // "Save Notes to Drive" / "Load Notes from Drive" themselves. This uses Google's
+        // client-side OAuth token model (no backend, no client secret): a short-lived access
+        // token is requested in the browser, used directly against the Drive REST API, and
+        // never persisted anywhere. Scope is drive.file — this app can only see/modify files
+        // it itself created, never the rest of the user's Drive.
+        let driveAccessToken = null;
+        let driveTokenClient = null;
+
+        function setDriveStatus(text, kind) {
+            const el = $('driveStatus');
+            if (!text) { el.hidden = true; return; }
+            el.hidden = false;
+            el.textContent = text;
+            el.title = text;
+            el.classList.remove('drive-status-ok', 'drive-status-busy', 'drive-status-err');
+            if (kind) el.classList.add('drive-status-' + kind);
+        }
+
+        function driveConfigured() {
+            return GOOGLE_DRIVE_CLIENT_ID && !GOOGLE_DRIVE_CLIENT_ID.startsWith('YOUR_GOOGLE_CLIENT_ID');
+        }
+
+        function updateDriveButtonsForAuthState() {
+            const signedIn = !!driveAccessToken;
+            $('driveConnectBtn').hidden = signedIn;
+            $('driveSaveBtn').hidden = !signedIn;
+            $('driveLoadBtn').hidden = !signedIn;
+            $('driveSaveBtn').disabled = !signedIn || !fileKey;
+            $('driveLoadBtn').disabled = !signedIn || !fileKey;
+        }
+
+        function connectGoogleDrive() {
+            if (!driveConfigured()) {
+                showToast('⚠ Drive sync needs setup — see the README for how to get a free Client ID', true);
+                return;
+            }
+            if (typeof google === 'undefined' || !google.accounts || !google.accounts.oauth2) {
+                showToast('Google sign-in library still loading, try again in a moment', true);
+                return;
+            }
+
+            if (!driveTokenClient) {
+                driveTokenClient = google.accounts.oauth2.initTokenClient({
+                    client_id: GOOGLE_DRIVE_CLIENT_ID,
+                    scope: GOOGLE_DRIVE_SCOPE,
+                    callback: (tokenResponse) => {
+                        if (tokenResponse && tokenResponse.access_token) {
+                            driveAccessToken = tokenResponse.access_token;
+                            setDriveStatus('Connected', 'ok');
+                            updateDriveButtonsForAuthState();
+                            showToast('☁ Connected to Google Drive');
+                        } else {
+                            setDriveStatus('Sign-in failed', 'err');
+                            showToast('⚠ Google sign-in did not complete', true);
+                        }
+                    },
+                    error_callback: (err) => {
+                        console.warn('Drive auth error:', err);
+                        setDriveStatus('Sign-in cancelled', 'err');
+                    }
+                });
+            }
+
+            setDriveStatus('Signing in…', 'busy');
+            driveTokenClient.requestAccessToken();
+        }
+
+        // Drive filenames are derived from fileKey so the same source PDF/video always maps
+        // to the same notes file on Drive, enabling clean overwrite-on-save and find-on-load
+        // rather than piling up duplicate files every time you save.
+        function driveFileNameFor(fkey) {
+            const safe = fkey.replace(/[\\/:*?"<>|]+/g, '_');
+            return `PageNotes-${safe}.json`;
+        }
+
+        // Drive REST calls go through plain fetch with the Bearer token — no client library
+        // needed for the handful of endpoints this app uses (files.list, files.create,
+        // files.update with media, files.get with alt=media).
+        function driveAuthError(status) {
+            const err = new Error(`Drive request failed (${status})`);
+            err.isDriveAuthError = (status === 401);
+            return err;
+        }
+
+        async function driveFindFile(name) {
+            const q = encodeURIComponent(`name = '${name.replace(/'/g, "\\'")}' and trashed = false`);
+            const res = await fetch(`https://www.googleapis.com/drive/v3/files?q=${q}&fields=files(id,name,modifiedTime)&spaces=drive`, {
+                headers: { Authorization: 'Bearer ' + driveAccessToken }
+            });
+            if (!res.ok) throw driveAuthError(res.status);
+            const data = await res.json();
+            return (data.files && data.files.length > 0) ? data.files[0] : null;
+        }
+
+        async function driveUploadFile(name, jsonString, existingFileId) {
+            const metadata = { name, mimeType: 'application/json' };
+            const form = new FormData();
+            form.append('metadata', new Blob([JSON.stringify(metadata)], { type: 'application/json' }));
+            form.append('file', new Blob([jsonString], { type: 'application/json' }));
+
+            const url = existingFileId
+                ? `https://www.googleapis.com/upload/drive/v3/files/${existingFileId}?uploadType=multipart&fields=id`
+                : `https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id`;
+
+            const res = await fetch(url, {
+                method: existingFileId ? 'PATCH' : 'POST',
+                headers: { Authorization: 'Bearer ' + driveAccessToken },
+                body: form
+            });
+            if (!res.ok) throw driveAuthError(res.status);
+            return res.json();
+        }
+
+        async function driveDownloadFile(fileId) {
+            const res = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`, {
+                headers: { Authorization: 'Bearer ' + driveAccessToken }
+            });
+            if (!res.ok) throw driveAuthError(res.status);
+            return res.text();
+        }
+
+        // Bundles everything for the current source (sketch page count + every page's
+        // Fabric JSON) into one portable object. This is what actually gets uploaded —
+        // a single small JSON file per source, not one Drive file per page.
+        function buildNotesBundle() {
+            const pages = {};
+            for (let p = 1; p <= sketchPageCount; p++) {
+                const data = Store.get(sketchStorageKey(fileKey, p));
+                if (data) pages[String(p)] = JSON.parse(data);
+            }
+            return {
+                formatVersion: 1,
+                fileKey,
+                fileLabel,
+                sketchPageCount,
+                savedAt: new Date().toISOString(),
+                pages
+            };
+        }
+
+        function restoreNotesBundle(bundle) {
+            if (!bundle || typeof bundle !== 'object' || !bundle.pages) {
+                throw new Error('That Drive file doesn\'t look like a PageNotes bundle');
+            }
+            const count = parseInt(bundle.sketchPageCount, 10);
+            sketchPageCount = (!isNaN(count) && count >= 1) ? count : 1;
+            saveSketchPageCount();
+
+            for (const [pageNum, pageJson] of Object.entries(bundle.pages)) {
+                Store.set(sketchStorageKey(fileKey, pageNum), JSON.stringify(pageJson));
+            }
+        }
+
+        // If a Drive call fails with 401 (expired/revoked token), there's no way to silently
+        // refresh in the token model — the user must reconnect via a fresh user gesture. This
+        // resets the UI back to the "Connect Drive" state so that path is obvious rather than
+        // leaving Save/Load buttons visible but permanently failing.
+        function handleDriveAuthFailure() {
+            driveAccessToken = null;
+            updateDriveButtonsForAuthState();
+            setDriveStatus('Session expired — reconnect', 'err');
+        }
+
+        async function saveNotesToDrive() {
+            if (!fileKey) { showToast('Open a PDF or video first'); return; }
+            if (!driveAccessToken) { showToast('Connect to Google Drive first'); return; }
+
+            saveCanvasData(); // flush whatever's currently on screen
+
+            const btn = $('driveSaveBtn');
+            btn.disabled = true;
+            setDriveStatus('Saving…', 'busy');
+
+            try {
+                const name = driveFileNameFor(fileKey);
+                const existing = await driveFindFile(name);
+                const bundle = buildNotesBundle();
+                await driveUploadFile(name, JSON.stringify(bundle), existing ? existing.id : null);
+
+                setDriveStatus('Saved ✓', 'ok');
+                showToast('☁ Notes saved to Google Drive');
+            } catch (err) {
+                console.error(err);
+                if (err && err.isDriveAuthError) {
+                    handleDriveAuthFailure();
+                    showToast('⚠ Google Drive session expired — please reconnect', true);
+                    return;
+                }
+                setDriveStatus('Save failed', 'err');
+                showToast('⚠ Could not save to Drive: ' + (err.message || 'unknown error'), true);
+            } finally {
+                updateDriveButtonsForAuthState();
+            }
+        }
+
+        async function loadNotesFromDrive() {
+            if (!fileKey) { showToast('Open a PDF or video first'); return; }
+            if (!driveAccessToken) { showToast('Connect to Google Drive first'); return; }
+
+            setDriveStatus('Checking Drive…', 'busy');
+            $('driveLoadBtn').disabled = true;
+
+            try {
+                const name = driveFileNameFor(fileKey);
+                const existing = await driveFindFile(name);
+                if (!existing) {
+                    setDriveStatus('No saved notes found', 'err');
+                    showToast('No notes for this file were found on Drive — try saving first.');
+                    return;
+                }
+
+                if (!confirm('Load notes from Google Drive? This will overwrite your current notes for this file in this browser.')) {
+                    setDriveStatus('Connected', 'ok');
+                    return;
+                }
+
+                setDriveStatus('Loading…', 'busy');
+                const jsonText = await driveDownloadFile(existing.id);
+                const bundle = JSON.parse(jsonText);
+                restoreNotesBundle(bundle);
+
+                sketchPage = 1;
+                updateNotesPageIndicator();
+                await loadCanvasDataAsync(sketchPage);
+
+                setDriveStatus('Loaded ✓', 'ok');
+                showToast('☁ Notes loaded from Google Drive');
+            } catch (err) {
+                console.error(err);
+                if (err && err.isDriveAuthError) {
+                    handleDriveAuthFailure();
+                    showToast('⚠ Google Drive session expired — please reconnect', true);
+                    return;
+                }
+                setDriveStatus('Load failed', 'err');
+                showToast('⚠ Could not load from Drive: ' + (err.message || 'unknown error'), true);
+            } finally {
+                updateDriveButtonsForAuthState();
+            }
+        }
+
         const rendered = new Set();
 
         async function buildPages() {
@@ -1302,6 +1585,7 @@
                 $('btn-notes-next').disabled = true;
                 $('btn-add-page').disabled = true;
                 $('btn-delete-page').disabled = true;
+                updateDriveButtonsForAuthState();
                 return;
             }
             $('notesPageIndicator').textContent = `Page ${sketchPage} / ${sketchPageCount}`;
@@ -1309,6 +1593,7 @@
             $('btn-notes-next').disabled = (sketchPage >= sketchPageCount);
             $('btn-add-page').disabled = false;
             $('btn-delete-page').disabled = (sketchPageCount <= 1);
+            updateDriveButtonsForAuthState();
         }
 
         // PDF viewer's own page change — purely visual, never touches the sketchpad.
